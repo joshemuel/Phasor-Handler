@@ -38,6 +38,14 @@ class CircleRoiTool(QObject):
         # color may be a QColor or (r,g,b,a) tuple
         self._saved_rois = []
 
+        # stimulus ROIs: list of dicts with keys 'id','xyxy','name'
+        self._stim_rois = []
+        # visibility flags: allow hiding various overlay elements without
+        # modifying the underlying data structures
+        self._show_saved_rois = True
+        self._show_stim_rois = True
+        self._show_current_bbox = True
+
         # translation state
         self._mode = None  # 'draw' or 'translate' or None
         self._translate_anchor = None  # QPointF
@@ -69,6 +77,42 @@ class CircleRoiTool(QObject):
         self._dragging = False
         if self._base_pixmap is not None:
             self._label.setPixmap(self._base_pixmap)
+
+    def clear_selection(self):
+        """Clear only the current (interactive) bbox/selection but keep
+        saved and stimulus ROIs intact and visible according to visibility
+        flags."""
+        self._start_pos = None
+        self._current_pos = None
+        self._bbox = None
+        self._dragging = False
+        # repaint overlay to show saved/stim ROIs
+        if self._base_pixmap is not None:
+            self._paint_overlay()
+
+    def set_show_saved_rois(self, show: bool):
+        """Toggle visibility of saved ROIs without modifying their data."""
+        try:
+            self._show_saved_rois = bool(show)
+        except Exception:
+            self._show_saved_rois = True
+        self._paint_overlay()
+
+    def set_show_stim_rois(self, show: bool):
+        """Toggle visibility of stimulus ROIs without modifying their data."""
+        try:
+            self._show_stim_rois = bool(show)
+        except Exception:
+            self._show_stim_rois = True
+        self._paint_overlay()
+
+    def set_show_current_bbox(self, show: bool):
+        """Toggle visibility of the current interactive bbox."""
+        try:
+            self._show_current_bbox = bool(show)
+        except Exception:
+            self._show_current_bbox = True
+        self._paint_overlay()
 
     # --- Event filter for mouse handling and painting overlay ---
 
@@ -215,50 +259,109 @@ class CircleRoiTool(QObject):
         pen = QPen(QColor(255, 255, 0, 180))
         pen.setWidth(3)
         painter.setPen(pen)
+        # Draw current interactive bbox if present and allowed
+        if self._bbox is not None and getattr(self, '_show_current_bbox', True):
+            try:
+                left, top, w, h = self._bbox
+                painter.drawEllipse(int(round(left)), int(round(top)), int(round(w)), int(round(h)))
+            except Exception:
+                pass
 
-        if self._bbox is not None:
-            left, top, w, h = self._bbox
-            painter.drawEllipse(int(round(left)), int(round(top)), int(round(w)), int(round(h)))
+        # Draw any saved ROIs on top of the overlay (if visible)
+        if getattr(self, '_show_saved_rois', True):
+            try:
+                font = QFont()
+                font.setPointSize(12)
+                font.setBold(True)
+                painter.setFont(font)
+                for idx, saved in enumerate(list(self._saved_rois or [])):
+                    try:
+                        xyxy = saved.get('xyxy')
+                        if xyxy is None:
+                            continue
+                        lbbox = self._label_bbox_from_image_xyxy(xyxy)
+                        if lbbox is None:
+                            continue
+                        lx0, ly0, lw, lh = lbbox
+                        # determine color
+                        col = saved.get('color')
+                        if isinstance(col, QColor):
+                            qcol = col
+                        elif isinstance(col, (tuple, list)) and len(col) >= 3:
+                            a = col[3] if len(col) > 3 else 200
+                            qcol = QColor(int(col[0]), int(col[1]), int(col[2]), int(a))
+                        else:
+                            qcol = QColor(200, 100, 10, 200)
+                        spen = QPen(qcol)
+                        spen.setWidth(3)
+                        painter.setPen(spen)
+                        painter.drawEllipse(int(round(lx0)), int(round(ly0)), int(round(lw)), int(round(lh)))
+                        # draw label in middle (center text using font metrics)
+                        tx = float(lx0 + lw / 2.0)
+                        ty = float(ly0 + lh / 2.0)
+                        # Show full name if it starts with "S" (stimulated ROIs), otherwise show index
+                        roi_name = saved.get('name', '')
+                        if roi_name and roi_name.startswith('S'):
+                            text = roi_name
+                        else:
+                            text = str(idx + 1)
+                        # choose text color that contrasts (white or black)
+                        text_col = QColor(255, 255, 255)
+                        fm = painter.fontMetrics()
+                        tw = fm.horizontalAdvance(text)
+                        ascent = fm.ascent()
+                        descent = fm.descent()
+                        text_x = int(round(tx - tw / 2.0))
+                        # baseline must be offset so text vertically centers on the ellipse
+                        text_y = int(round(ty + (ascent - descent) / 2.0))
+                        painter.setPen(QPen(text_col))
+                        painter.drawText(text_x, text_y, text)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
 
-        # Draw any saved ROIs on top of the overlay
-        try:
-            font = QFont()
-            font.setPointSize(12)
-            font.setBold(True)
-            painter.setFont(font)
-            for idx, saved in enumerate(list(self._saved_rois or [])):
-                try:
-                    xyxy = saved.get('xyxy')
-                    if xyxy is None:
+        # Draw stimulus ROIs with distinctive styling (if visible)
+        if getattr(self, '_show_stim_rois', True):
+            try:
+                font = QFont()
+                font.setPointSize(12)
+                font.setBold(True)
+                painter.setFont(font)
+                for stim_roi in list(self._stim_rois or []):
+                    try:
+                        xyxy = stim_roi.get('xyxy')
+                        if xyxy is None:
+                            continue
+                        lbbox = self._label_bbox_from_image_xyxy(xyxy)
+                        if lbbox is None:
+                            continue
+                        lx0, ly0, lw, lh = lbbox
+
+                        # Use cyan color with dashed line style for stimulus ROIs
+                        stim_pen = QPen(QColor(0, 200, 255, 220))  # Cyan color
+                        stim_pen.setWidth(3)
+                        stim_pen.setStyle(Qt.PenStyle.DashLine)  # Dashed line
+                        painter.setPen(stim_pen)
+                        painter.drawEllipse(int(round(lx0)), int(round(ly0)), int(round(lw)), int(round(lh)))
+
+                        # Draw stimulus label (e.g., "S1", "S2") centered using font metrics
+                        tx = float(lx0 + lw / 2.0)
+                        ty = float(ly0 + lh / 2.0)
+                        text_col = QColor(255, 255, 255)  # White text
+                        painter.setPen(QPen(text_col))
+                        stim_name = stim_roi.get('name', f"S{stim_roi.get('id', '?')}")
+                        fm = painter.fontMetrics()
+                        tw = fm.horizontalAdvance(stim_name)
+                        ascent = fm.ascent()
+                        descent = fm.descent()
+                        text_x = int(round(tx - tw / 2.0))
+                        text_y = int(round(ty + (ascent - descent) / 2.0))
+                        painter.drawText(text_x, text_y, stim_name)
+                    except Exception:
                         continue
-                    lbbox = self._label_bbox_from_image_xyxy(xyxy)
-                    if lbbox is None:
-                        continue
-                    lx0, ly0, lw, lh = lbbox
-                    # determine color
-                    col = saved.get('color')
-                    if isinstance(col, QColor):
-                        qcol = col
-                    elif isinstance(col, (tuple, list)) and len(col) >= 3:
-                        a = col[3] if len(col) > 3 else 200
-                        qcol = QColor(int(col[0]), int(col[1]), int(col[2]), int(a))
-                    else:
-                        qcol = QColor(200, 100, 10, 200)
-                    spen = QPen(qcol)
-                    spen.setWidth(3)
-                    painter.setPen(spen)
-                    painter.drawEllipse(int(round(lx0)), int(round(ly0)), int(round(lw)), int(round(lh)))
-                    # draw index in middle
-                    tx = int(round(lx0 + lw / 2.0))
-                    ty = int(round(ly0 + lh / 2.0))
-                    # choose text color that contrasts (white or black)
-                    text_col = QColor(255, 255, 255)
-                    painter.setPen(QPen(text_col))
-                    painter.drawText(tx - 6, ty + 6, str(idx + 1))
-                except Exception:
-                    continue
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         painter.end()
         self._label.setPixmap(overlay)
@@ -339,6 +442,17 @@ class CircleRoiTool(QObject):
                 self._saved_rois = list(saved_rois)
         except Exception:
             self._saved_rois = []
+
+    def set_stim_rois(self, stim_rois):
+        """Provide a list of stimulus ROI dicts (id, xyxy, name) to be drawn persistently."""
+        try:
+            if stim_rois is None:
+                self._stim_rois = []
+            else:
+                # store a shallow copy
+                self._stim_rois = list(stim_rois)
+        except Exception:
+            self._stim_rois = []
 
     # Backwards-compatible alias: some callers expect `show_box_image_coords`
     def show_box_image_coords(self, xyxy):

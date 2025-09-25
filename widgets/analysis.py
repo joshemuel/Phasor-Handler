@@ -1,14 +1,15 @@
-# TODO Add circular visualization for stimulated ROIs
+# TODO Quick save of stimulated ROIs
 # TODO Scale Bar
 # TODO Quick view of metadata: scale information pixel n FOV, XYZ position, stim events inf with ROIS (dutycycle format 0.5s20Hz5ms)
 # TODO single trace plotter, timepoint/framenumber selection
 # TODO read Mini2P data
 # TODO Save the display as a PNG
+# TODO BnC
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
     QPushButton, QLabel, QSlider, QLineEdit, QComboBox, QSizePolicy,
-    QFileDialog, QMessageBox
+    QFileDialog, QMessageBox, QGridLayout
 )
 from PyQt6.QtCore import Qt
 
@@ -74,9 +75,14 @@ class AnalysisWidget(QWidget):
         reg_button_layout.addWidget(remove_dir_btn)
         reg_button_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
-        self.analysis_list_widget.setMaximumWidth(220)
-        for d in getattr(self.window, 'selected_dirs', []):
-            self.analysis_list_widget.addItem(d)
+        self.analysis_list_widget.setMinimumWidth(220)
+        # Populate using the dir_manager's display names
+        from PyQt6.QtWidgets import QListWidgetItem
+        for full_path, display_name in getattr(self.window.dir_manager, 'get_display_names', lambda: [])():
+            item = QListWidgetItem(display_name)
+            item.setToolTip(full_path)
+            item.setData(Qt.ItemDataRole.UserRole, full_path)
+            self.analysis_list_widget.addItem(item)
         dir_layout.addWidget(self.analysis_list_widget)
         dir_layout.addLayout(reg_button_layout)
         dir_group.setLayout(dir_layout)
@@ -97,6 +103,12 @@ class AnalysisWidget(QWidget):
         self.cnb_button = QPushButton("BnC")
         self.cnb_button.setEnabled(False)
         self.cnb_button.clicked.connect(self.open_contrast_dialog)
+
+        self.stimulation_area_button = QPushButton("Show stim ROIs")
+        self.stimulation_area_button.setEnabled(False)
+        self.stimulation_area_button.setCheckable(True)
+        self.stimulation_area_button.setChecked(False)
+        self.stimulation_area_button.clicked.connect(self.toggle_stim_rois)
 
         self.composite_button = QPushButton("Show Composite")
         self.composite_button.setEnabled(False)
@@ -129,6 +141,7 @@ class AnalysisWidget(QWidget):
         mid_vbox.addWidget(self.file_type_button)
         mid_vbox.addWidget(self.channel_button)
         mid_vbox.addWidget(self.cnb_button)
+        mid_vbox.addWidget(self.stimulation_area_button)
         mid_vbox.addWidget(self.composite_button)
         mid_vbox.addWidget(self.zproj_std_button)
         mid_vbox.addWidget(self.zproj_max_button)
@@ -140,7 +153,7 @@ class AnalysisWidget(QWidget):
         self.reg_tif_label = QLabel("Select a directory to view registered images.")
         self.reg_tif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.reg_tif_label.setFixedSize(700, 629)
-        display_panel.addWidget(self.reg_tif_label, 1)
+        display_panel.addWidget(self.reg_tif_label, 0)
 
         # --- ROI Tool Integration ---
         self.roi_tool = CircleRoiTool(self.reg_tif_label)
@@ -161,7 +174,7 @@ class AnalysisWidget(QWidget):
         # ROI Items (Right panel)
         self.roi_list_widget = QListWidget()
         self.roi_list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.roi_list_widget.setMaximumWidth(220)
+        self.roi_list_widget.setMinimumWidth(220)
 
         # --- Bottom panel: Plot the signal of a given area ---
         bottom_panel = QHBoxLayout()
@@ -241,35 +254,61 @@ class AnalysisWidget(QWidget):
         self.window._ylim_max_user = None
 
         # --- Assemble layouts ---
-        main_hbox.addLayout(left_vbox, 0)
+        main_hbox.addLayout(left_vbox, 1)  # Allow directory list to expand
         main_hbox.addLayout(mid_vbox, 0)
-        main_hbox.addLayout(display_panel, 1)
+        main_hbox.addLayout(display_panel, 0)  # Keep image display fixed
         # Wrap ROI list in a group similar to Registered Directories
         roi_group = QGroupBox("Saved ROIs")
         roi_vbox = QVBoxLayout()
         roi_vbox.addWidget(self.roi_list_widget)
 
-        roi_btn_vbox = QVBoxLayout()
-        roi_btn_hbox = QHBoxLayout()
+        roi_grid_layout = QGridLayout()
         add_roi_btn = QPushButton("Add ROI")
         remove_roi_btn = QPushButton("Remove ROI")
-        export_roi_btn = QPushButton("Export Trace...")
+        export_trace_btn = QPushButton("Export Trace...")
+        self.hide_rois_checkbox = None
+        try:
+            from PyQt6.QtWidgets import QCheckBox
+            self.hide_rois_checkbox = QCheckBox("Hide ROIs")
+            self.hide_rois_checkbox.setChecked(False)
+            self.hide_rois_checkbox.setToolTip("Hide saved and drawn ROIs from the image view")
+            self.hide_rois_checkbox.stateChanged.connect(lambda s: self._on_hide_rois_toggled(s))
+        except Exception:
+            self.hide_rois_checkbox = None
+        save_roi_btn = QPushButton("Save ROIs...")
+        load_roi_btn = QPushButton("Load ROIs...")
         add_roi_btn.setFixedWidth(110)
         remove_roi_btn.setFixedWidth(110)
-        export_roi_btn.setFixedWidth(110)
-        roi_btn_hbox.addWidget(add_roi_btn)
-        roi_btn_hbox.addWidget(remove_roi_btn)
-        roi_btn_vbox.addLayout(roi_btn_hbox)
-        roi_btn_vbox.addWidget(export_roi_btn, 0, Qt.AlignmentFlag.AlignHCenter)
-        roi_vbox.addLayout(roi_btn_vbox)
+        export_trace_btn.setFixedWidth(110)
+        save_roi_btn.setFixedWidth(110)
+        load_roi_btn.setFixedWidth(110)
+        roi_grid_layout.addWidget(add_roi_btn, 0, 0)       # Row 0, Column 0
+        roi_grid_layout.addWidget(remove_roi_btn, 0, 1)    # Row 0, Column 1
+        roi_grid_layout.addWidget(save_roi_btn, 1, 0)      # Row 1, Column 0
+        roi_grid_layout.addWidget(load_roi_btn, 1, 1)      # Row 1, Column 1
+        roi_grid_layout.addWidget(export_trace_btn, 2, 0, 1, 2)  # Row 2, spanning 2 columns
+        # Place the hide checkbox under the export button (spanning 2 columns)
+        if self.hide_rois_checkbox is not None:
+            roi_grid_layout.addWidget(self.hide_rois_checkbox, 3, 0, 1, 2)
+
+        roi_vbox.addLayout(roi_grid_layout)
         roi_group.setLayout(roi_vbox)
-        main_hbox.addWidget(roi_group, 0)
+        main_hbox.addWidget(roi_group, 1)  # Allow ROI list to expand too
 
         # Connect buttons to handlers (local handlers implemented below)
         add_roi_btn.clicked.connect(self._on_add_roi_clicked)
         remove_roi_btn.clicked.connect(self._on_remove_roi_clicked)
-        export_roi_btn.clicked.connect(self._on_export_roi_clicked)
-
+        save_roi_btn.clicked.connect(self._on_save_roi_positions_clicked)
+        load_roi_btn.clicked.connect(self._on_load_roi_positions_clicked)
+        export_trace_btn.clicked.connect(self._on_export_roi_clicked)
+        # Ensure checkbox initial visibility state sync with ROI tool
+        if self.hide_rois_checkbox is not None:
+            try:
+                # default: show ROIs
+                self.roi_tool.set_show_saved_rois(True)
+                self.roi_tool.set_show_stim_rois(True)
+            except Exception:
+                pass
         # Selection change should restore saved ROI
         self.roi_list_widget.currentItemChanged.connect(self._on_saved_roi_selected)
 
@@ -423,10 +462,14 @@ class AnalysisWidget(QWidget):
             self.file_type_button.setEnabled(False)
             return
 
-        reg_dir = current.text()
+        # Get the full path from UserRole, fallback to text for compatibility
+        reg_dir = current.data(Qt.ItemDataRole.UserRole)
+        if reg_dir is None:
+            reg_dir = current.text()
         reg_tif_path = os.path.join(reg_dir, "Ch1-reg.tif")
         reg_tif_chan2_path = os.path.join(reg_dir, "Ch2-reg.tif")
         exp_details = os.path.join(reg_dir, "experiment_summary.pkl")
+        exp_json = os.path.join(reg_dir, "experiment_summary.json")
 
         # Initialize variables
         tif = None
@@ -455,6 +498,22 @@ class AnalysisWidget(QWidget):
                     tif_chan2 = None
                 self.window._current_tif = tif
                 self.window._current_tif_chan2 = tif_chan2
+                # DEBUG: print dtype and inferred bit depth for loaded images
+                try:
+                    dt = tif.dtype
+                    bits = dt.itemsize * 8
+                    print(f"DEBUG: Ch1 loaded dtype={dt}, inferred bits={bits}")
+                except Exception:
+                    print("DEBUG: Ch1 loaded, but couldn't determine dtype/bits")
+                try:
+                    if tif_chan2 is not None:
+                        dt2 = tif_chan2.dtype
+                        bits2 = dt2.itemsize * 8
+                        print(f"DEBUG: Ch2 loaded dtype={dt2}, inferred bits={bits2}")
+                    else:
+                        print("DEBUG: Ch2 not present")
+                except Exception:
+                    print("DEBUG: Ch2 loaded, but couldn't determine dtype/bits")
                 # Store last image width and height for ROI tools
                 if tif.ndim == 3:
                     self.window._last_img_wh = (tif.shape[2], tif.shape[1])
@@ -471,7 +530,6 @@ class AnalysisWidget(QWidget):
             # Load raw numpy files
             self.reg_tif_label.setPixmap(QPixmap())
             self.reg_tif_label.setText("Loading raw numpy files...")
-            QApplication.processEvents()
             
             try:
                 if os.path.isfile(npy_ch0_path):
@@ -487,6 +545,22 @@ class AnalysisWidget(QWidget):
                     self.window._current_tif_chan2 = tif_chan2
                 else:
                     self.window._current_tif_chan2 = None
+                # DEBUG: print dtype and inferred bit depth for raw numpy files
+                try:
+                    dt = tif.dtype
+                    bits = dt.itemsize * 8
+                    print(f"DEBUG: Raw Ch1 loaded dtype={dt}, inferred bits={bits}")
+                except Exception:
+                    print("DEBUG: Raw Ch1 loaded, but couldn't determine dtype/bits")
+                try:
+                    if tif_chan2 is not None:
+                        dt2 = tif_chan2.dtype
+                        bits2 = dt2.itemsize * 8
+                        print(f"DEBUG: Raw Ch2 loaded dtype={dt2}, inferred bits={bits2}")
+                    else:
+                        print("DEBUG: Raw Ch2 not present")
+                except Exception:
+                    print("DEBUG: Raw Ch2 loaded, but couldn't determine dtype/bits")
                     
                 # Store last image width and height for ROI tools
                 if tif.ndim == 3:
@@ -505,7 +579,6 @@ class AnalysisWidget(QWidget):
             # Fallback to numpy files if user wants registered but they don't exist
             self.reg_tif_label.setPixmap(QPixmap())
             self.reg_tif_label.setText("No registered TIFF files found. Loading raw numpy files...")
-            self.file_type_button.setText("No Registration")
             
             try:
                 if os.path.isfile(npy_ch0_path):
@@ -560,12 +633,14 @@ class AnalysisWidget(QWidget):
                 self.window._current_tif = None
                 return
         else:
-            # Neither file type is available
-            self.reg_tif_label.setText("No image files found (neither registered TIFF nor raw numpy files).")
-            self.reg_tif_label.setPixmap(QPixmap())
+            # Neither file type is available - show clear message to user
+            self.reg_tif_label.setPixmap(QPixmap())  # Clear any existing image
+            self.reg_tif_label.setText("No image files found in this directory.\n\nThis directory doesn't contain:\n• Ch1-reg.tif (registered files)\n• ImageData_Ch0_TP0000000.npy (raw files)")
             self.tif_slider.setEnabled(False)
             self.tif_slider.setMaximum(0)
             self.window._current_tif = None
+            self.window._current_tif_chan2 = None
+            self.file_type_button.setEnabled(False)
             return
 
         # Reading the experiment summary/metadata
@@ -584,6 +659,7 @@ class AnalysisWidget(QWidget):
                 self.window._exp_data = ExpData(exp_data)
             except Exception as e:
                 self.reg_tif_label.setText("Failed to load existing metadata. Attempting to read from raw files...")
+                self.stimulation_area_button.setEnabled(False)
         
         # If no metadata exists or failed to load, try to read metadata from raw files
         if self.window._exp_data is None:
@@ -626,6 +702,7 @@ class AnalysisWidget(QWidget):
                             self.window._exp_data = ExpData(exp_data)
                         except Exception as e:
                             self.reg_tif_label.setText("Metadata read but failed to load experiment summary.")
+                            self.window._exp_data = None
                             
             except Exception as e:
                 if not hasattr(self, 'conv_log'):
@@ -648,6 +725,19 @@ class AnalysisWidget(QWidget):
 
         # Enable file type toggle if both file types are available
         self.file_type_button.setEnabled(has_registered_tif and has_raw_numpy)
+        # If there's no registered TIFF, make the button default indicate that
+        try:
+            if not has_registered_tif:
+                # Keep an explicit message when registration is absent
+                self.file_type_button.setText("No Registration")
+            else:
+                # When registration exists, ensure the button reflects current preference
+                if getattr(self, '_using_registered', True):
+                    self.file_type_button.setText("Show Raw")
+                else:
+                    self.file_type_button.setText("Show Registration")
+        except Exception:
+            pass
 
         # Make the channel and composite buttons active if channel 2 exists
         # Check for registered tiff first, then numpy file
@@ -670,8 +760,27 @@ class AnalysisWidget(QWidget):
         self.zproj_mean_button.setEnabled(True)
             
         # enable contrast & brightness when an image is loaded
+        self.cnb_button.setEnabled(True)
+            
+        # Enable stimulus ROI button if experiment data contains stimulus locations
         try:
-            self.cnb_button.setEnabled(bool(getattr(self.window, '_cnb_active', False)))
+            stim_rois = self._get_stim_rois_from_experiment()
+            has_stim_data = len(stim_rois) > 0
+            print(f"DEBUG: Found {len(stim_rois)} stimulus ROIs")
+            if hasattr(self.window, '_exp_data') and self.window._exp_data:
+                print(f"DEBUG: Experiment data attributes: {[attr for attr in dir(self.window._exp_data) if not attr.startswith('_')]}")
+            self.stimulation_area_button.setEnabled(has_stim_data)
+            # Ensure the button remains checkable when enabled
+            if has_stim_data:
+                self.stimulation_area_button.setCheckable(True)
+        except Exception as e:
+            print(f"DEBUG: Exception in stimulus detection: {e}")
+            self.stimulation_area_button.setEnabled(False)
+            
+        # Update trace if there's an active ROI to reflect new data
+        try:
+            if getattr(self.window, '_last_roi_xyxy', None) is not None:
+                self._update_trace_from_roi()
         except Exception:
             pass
 
@@ -749,14 +858,19 @@ class AnalysisWidget(QWidget):
             self.reg_tif_label.setText(f"Error: Frame {frame_idx} is empty or corrupted.")
             return
 
-        # Normalize base channel (green)
+        # Normalize base channel (green) using robust percentile clipping
         g = img.astype(np.float32)
 
-        # Calculate a threshold (e.g., the 5th percentile of pixel values)
-        g_threshold = np.percentile(g, 5)
-        g_clipped = np.clip(g, g_threshold, g.max())
+        # Use lower and upper percentiles to avoid single-pixel outliers
+        g_low = np.percentile(g, 5)
+        g_high = np.percentile(g, 99.5)
+        # Ensure sensible ordering
+        if g_high <= g_low:
+            g_high = float(g.max())
 
-        # Now, normalize the clipped data
+        g_clipped = np.clip(g, g_low, g_high)
+
+        # Now, normalize the clipped data to [0,1]
         g_min_view = float(np.min(g_clipped))
         g_ptp_view = float(np.ptp(g_clipped))
         g_view = (g_clipped - g_min_view) / (g_ptp_view if g_ptp_view > 0 else 1.0)
@@ -767,8 +881,12 @@ class AnalysisWidget(QWidget):
             self.zproj_mean_button.setEnabled(True)
 
             r = img_chan2.astype(np.float32)
-            r_threshold = np.percentile(r, 5)
-            r_clipped = np.clip(r, r_threshold, r.max())
+            # Use robust percentile clipping for red channel as well
+            r_low = np.percentile(r, 5)
+            r_high = np.percentile(r, 99.5)
+            if r_high <= r_low:
+                r_high = float(r.max())
+            r_clipped = np.clip(r, r_low, r_high)
             r_min_view = float(np.min(r_clipped))
             r_ptp_view = float(np.ptp(r_clipped))
             r_view = (r_clipped - r_min_view) / (r_ptp_view if r_ptp_view > 0 else 1.0)
@@ -784,9 +902,12 @@ class AnalysisWidget(QWidget):
             if img_chan2 is not None and active_ch == 2:
                 r = img_chan2.astype(np.float32)
                 
-                # Apply the same contrast enhancement as channel 1
-                r_threshold = np.percentile(r, 5)
-                r_clipped = np.clip(r, r_threshold, r.max())
+                # Apply the same robust contrast enhancement as composite path
+                r_low = np.percentile(r, 5)
+                r_high = np.percentile(r, 99.5)
+                if r_high <= r_low:
+                    r_high = float(r.max())
+                r_clipped = np.clip(r, r_low, r_high)
                 r_min_view = float(np.min(r_clipped))
                 r_ptp_view = float(np.ptp(r_clipped))
                 r_view = (r_clipped - r_min_view) / (r_ptp_view if r_ptp_view > 0 else 1.0)
@@ -802,6 +923,7 @@ class AnalysisWidget(QWidget):
         h, w, _ = arr_uint8.shape
         qimg = QImage(arr_uint8.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
         pixmap = QPixmap.fromImage(qimg)
+        
         # store a copy of the displayed image for CNB (as grayscale or RGB uint8)
         try:
             if arr_uint8.shape[2] == 4:
@@ -813,7 +935,56 @@ class AnalysisWidget(QWidget):
         except Exception:
             self.window._current_image_np = None
             self.window._current_qimage = None
-        # Apply the current CNB settings (if dialog active) to preserve user adjustments across frames
+            
+        # Apply global BnC settings if they exist and are enabled
+        if (hasattr(self.window, '_global_bnc_settings') and 
+            self.window._global_bnc_settings.get('enabled', False)):
+            try:
+                # Apply BnC directly to the raw image data before display
+                from tools.bnc import apply_bnc_to_image, create_qimage_from_array, create_composite_image
+                
+                # Get BnC settings
+                settings = self.window._global_bnc_settings
+                
+                # Apply BnC to current frame
+                if img_chan2 is not None and self.composite_button.isChecked():
+                    # Composite mode - apply BnC to both channels
+                    bnc_img = create_composite_image(img, img_chan2, settings['ch1'], settings['ch2'])
+                else:
+                    # Single channel mode
+                    active_ch = getattr(self, "_active_channel", 1)
+                    if img_chan2 is not None and active_ch == 2:
+                        # Channel 2
+                        bnc_img = apply_bnc_to_image(img_chan2, settings['ch2']['min'], settings['ch2']['max'], settings['ch2']['contrast'])
+                        # Convert to RGBA grayscale
+                        if bnc_img.ndim == 2:
+                            h_bnc, w_bnc = bnc_img.shape
+                            rgba_bnc = np.zeros((h_bnc, w_bnc, 4), dtype=np.uint8)
+                            rgba_bnc[..., :3] = bnc_img[..., None]
+                            rgba_bnc[..., 3] = 255
+                            bnc_img = rgba_bnc
+                    else:
+                        # Channel 1
+                        bnc_img = apply_bnc_to_image(img, settings['ch1']['min'], settings['ch1']['max'], settings['ch1']['contrast'])
+                        # Convert to RGBA grayscale  
+                        if bnc_img.ndim == 2:
+                            h_bnc, w_bnc = bnc_img.shape
+                            rgba_bnc = np.zeros((h_bnc, w_bnc, 4), dtype=np.uint8)
+                            rgba_bnc[..., :3] = bnc_img[..., None]
+                            rgba_bnc[..., 3] = 255
+                            bnc_img = rgba_bnc
+                
+                # Create new QImage and pixmap with BnC applied
+                if bnc_img is not None:
+                    qimg = create_qimage_from_array(bnc_img)
+                    pixmap = QPixmap.fromImage(qimg)
+                    
+            except Exception as e:
+                print(f"DEBUG: Error applying global BnC in update_tif_frame: {e}")
+                # Fall back to original pixmap if BnC fails
+                pass
+        
+        # Scale and display the final pixmap
         try:
             base_pix = pixmap.scaled(
                 self.reg_tif_label.size(),
@@ -822,11 +993,6 @@ class AnalysisWidget(QWidget):
             )
             self.reg_tif_label.setFixedSize(base_pix.size())
             self.reg_tif_label.setPixmap(base_pix)
-            if getattr(self.window, '_cnb_contrast', None) is not None or getattr(self.window, '_cnb_min', None) is not None:
-                try:
-                    self._apply_cnb_adjustments()
-                except Exception:
-                    self.reg_tif_label.setPixmap(base_pix)
         except Exception:
             self.reg_tif_label.setPixmap(pixmap.scaled(self.reg_tif_label.size(), Qt.AspectRatioMode.KeepAspectRatio))
         self.reg_tif_label.setText("")
@@ -847,6 +1013,13 @@ class AnalysisWidget(QWidget):
             # Update saved ROIs so they display persistently
             if hasattr(self.window, '_saved_rois'):
                 self.roi_tool.set_saved_rois(self.window._saved_rois)
+
+            # Use the central toggle handler to (show/hide) stimulus ROIs
+            try:
+                # toggle_stim_rois will read experiment data and respect the button state
+                self.toggle_stim_rois()
+            except Exception:
+                pass
 
             if getattr(self.window, '_last_roi_xyxy', None) is not None:
                 try:
@@ -946,6 +1119,93 @@ class AnalysisWidget(QWidget):
                 self._update_trace_vline()
             except Exception:
                 pass
+
+    def _on_load_roi_positions_clicked(self):
+        """Load ROI positions from a JSON file."""
+        # Open file dialog to choose file to import
+        file_dialog = QFileDialog(self)
+        file_dialog.setWindowTitle("Load ROI Positions")
+        file_dialog.setNameFilter("JSON files (*.json)")
+        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        
+        if not file_dialog.exec():
+            return
+            
+        filename = file_dialog.selectedFiles()[0]
+        
+        try:
+            import json
+            with open(filename, 'r') as f:
+                roi_data = json.load(f)
+            
+            # Clear existing ROIs first
+            self.roi_list_widget.clear()
+            if hasattr(self.window, '_saved_rois'):
+                self.window._saved_rois = []
+            else:
+                self.window._saved_rois = []
+            
+            # Load the imported ROIs
+            for roi in roi_data:
+                roi_entry = {
+                    'name': roi['name'],
+                    'xyxy': tuple(roi['xyxy']),
+                    'color': tuple(roi['color'])
+                }
+                self.window._saved_rois.append(roi_entry)
+                self.roi_list_widget.addItem(roi['name'])
+            
+            # Update the ROI tool with imported ROIs
+            if hasattr(self.roi_tool, 'set_saved_rois'):
+                self.roi_tool.set_saved_rois(self.window._saved_rois)
+                self.roi_tool._paint_overlay()
+            
+            QMessageBox.information(self, "Load Complete", 
+                                  f"Successfully loaded {len(roi_data)} ROI positions from:\n{filename}")
+                                  
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", f"Failed to load ROI positions:\n{str(e)}")
+            print(f"Load error: {e}")
+
+    def _on_save_roi_positions_clicked(self):
+        """Save ROI positions to a JSON file."""
+        if not hasattr(self.window, '_saved_rois') or not self.window._saved_rois:
+            QMessageBox.information(self, "No ROIs", "No ROIs to save. Please add some ROIs first.")
+            return
+            
+        # Open file dialog to choose save location
+        file_dialog = QFileDialog(self)
+        file_dialog.setWindowTitle("Save ROI Positions")
+        file_dialog.setNameFilter("JSON files (*.json)")
+        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        file_dialog.setDefaultSuffix("json")
+        
+        if not file_dialog.exec():
+            return
+            
+        filename = file_dialog.selectedFiles()[0]
+        
+        try:
+            # Prepare ROI data for JSON serialization
+            roi_data = []
+            for roi in self.window._saved_rois:
+                roi_data.append({
+                    'name': roi['name'],
+                    'xyxy': list(roi['xyxy']),
+                    'color': list(roi['color'])
+                })
+            
+            # Save to file
+            import json
+            with open(filename, 'w') as f:
+                json.dump(roi_data, f, indent=2)
+            
+            QMessageBox.information(self, "Save Complete", 
+                                  f"Successfully saved {len(roi_data)} ROI positions to:\n{filename}")
+                                  
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save ROI positions:\n{str(e)}")
+            print(f"Save error: {e}")
 
     def _on_export_roi_clicked(self):
         """Export all saved ROIs for all timepoints to a tab-separated text file."""
@@ -1058,8 +1318,8 @@ class AnalysisWidget(QWidget):
                 green_frame = tif[frame_idx]
                 red_frame = tif_chan2[frame_idx] if tif_chan2 is not None else None
                 
-                # Start row with frame number
-                row_data = [str(frame_idx)]
+                # Start row with frame number (1-indexed)
+                row_data = [str(frame_idx + 1)]
                 
                 # Process each ROI
                 for i, roi in enumerate(self.window._saved_rois):
@@ -1202,6 +1462,120 @@ class AnalysisWidget(QWidget):
         if current_item:
             self.display_reg_tif_image(current_item)
 
+    def toggle_stim_rois(self):
+        """Show/hide the stimulus ROIs on the image."""
+        if self.stimulation_area_button.isChecked():
+            # Extract stimulus ROI data from experiment metadata
+            stim_rois = self._get_stim_rois_from_experiment()
+            if stim_rois:
+                # Pass stimulus ROIs to the ROI tool for display
+                if hasattr(self.roi_tool, 'set_stim_rois'):
+                    self.roi_tool.set_stim_rois(stim_rois)
+                    self.roi_tool._paint_overlay()
+            else:
+                # No stimulus data found, uncheck the button
+                self.stimulation_area_button.setChecked(False)
+        else:
+            # Hide stimulus ROIs
+            if hasattr(self.roi_tool, 'set_stim_rois'):
+                self.roi_tool.set_stim_rois([])
+                self.roi_tool._paint_overlay()
+
+    def _on_hide_rois_toggled(self, state):
+        """Hide or show saved/stim ROIs when checkbox toggled."""
+        show = False if state else True
+        try:
+            # hide saved ROIs and stimulus ROIs when checkbox is checked
+            self.roi_tool.set_show_saved_rois(show)
+            # also hide the interactive bbox if ROIs are hidden to reduce clutter
+            self.roi_tool.set_show_current_bbox(show)
+        except Exception:
+            pass
+
+    def _get_stim_rois_from_experiment(self):
+        """Extract stimulus ROI locations from experiment metadata.
+        
+        Only processes 'stimulated_roi_location' fields and deduplicates 
+        overlapping ROIs by ROI ID. Returns a list of unique stimulus ROIs.
+        """
+        stim_rois = []
+        roi_dict = {}  # Use dict to deduplicate by ROI ID
+        
+        # Check if we have experiment data
+        exp_data = getattr(self.window, '_exp_data', None)
+        if exp_data is None:
+            return stim_rois
+            
+        # Handle different formats of stimulus data
+        if isinstance(exp_data, dict):
+            # Only process stimulated_roi_location
+            if 'stimulated_roi_location' in exp_data:
+                roi_locations = exp_data['stimulated_roi_location']
+                
+                # Handle the nested list structure
+                if isinstance(roi_locations, list) and len(roi_locations) > 0:
+                    # Process all stimulation events
+                    for event_idx, event_data in enumerate(roi_locations):
+                        if isinstance(event_data, list):
+                            for roi_data in event_data:
+                                self._process_roi_data(roi_data, roi_dict, event_idx)
+            
+        # Try pickle format (from experiment_summary.pkl)
+        elif hasattr(exp_data, 'stimulated_roi_location'):
+            # Handle pandas DataFrame or similar object - only process stimulated_roi_location
+            roi_locations = getattr(exp_data, 'stimulated_roi_location', None)
+            if roi_locations is not None:
+                try:
+                    # Check if it's a list directly
+                    if isinstance(roi_locations, list) and len(roi_locations) > 0:
+                        for event_idx, event_data in enumerate(roi_locations):
+                            if isinstance(event_data, list):
+                                for roi_data in event_data:
+                                    self._process_roi_data(roi_data, roi_dict, event_idx)
+                    
+                    # Handle DataFrame format
+                    elif hasattr(roi_locations, 'iloc') and len(roi_locations) > 0:
+                        for event_idx, event_data in enumerate(roi_locations):
+                            if hasattr(event_data, '__iter__'):
+                                for roi_data in event_data:
+                                    self._process_roi_data(roi_data, roi_dict, event_idx)
+                except Exception as e:
+                    print(f"DEBUG: Exception processing stimulated_roi_location: {e}")
+        
+        # Convert deduplicated dict back to list
+        stim_rois = list(roi_dict.values())
+        print(f"DEBUG: Returning {len(stim_rois)} unique stimulus ROIs")
+        return stim_rois
+    
+    def _process_roi_data(self, roi_data, roi_dict, event_idx=None):
+        """Process individual ROI data entry and add to roi_dict for deduplication."""
+        try:
+            if len(roi_data) >= 3:
+                roi_id = roi_data[0]
+                start_pos = roi_data[1]
+                end_pos = roi_data[2]
+                
+                # Convert to xyxy format (x0, y0, x1, y1)
+                x0, y0 = int(start_pos[0]), int(start_pos[1])
+                x1, y1 = int(end_pos[0]), int(end_pos[1])
+                
+                # Create unique name with event info if available
+                if event_idx is not None:
+                    name = f'S{roi_id}E{event_idx}'
+                else:
+                    name = f'S{roi_id}'
+                
+                # Use roi_id as key for deduplication (same ID = same ROI)
+                # If roi_id already exists, keep the first occurrence
+                if roi_id not in roi_dict:
+                    roi_dict[roi_id] = {
+                        'id': roi_id,
+                        'xyxy': (x0, y0, x1, y1),
+                        'name': f'S{roi_id}'  # Simplified name for display
+                    }
+        except (IndexError, ValueError, TypeError) as e:
+            print(f"DEBUG: Error processing ROI data {roi_data}: {e}")
+
     def toggle_channel(self):
         """Flip between showing Ch1 or Ch2 in non-composite view and update the button text."""
         # Nothing to do if there is no second channel loaded
@@ -1232,208 +1606,235 @@ class AnalysisWidget(QWidget):
         self.channel_button.setEnabled(has_ch2 and not is_composite)
         # CNB button should be enabled when there's any image loaded
         has_img = getattr(self.window, '_current_tif', None) is not None
-        try:
-            # Only enable if CNB functionality is active
-            self.cnb_button.setEnabled(has_img and bool(getattr(self.window, '_cnb_active', False)))
-        except Exception:
-            pass
+        self.cnb_button.setEnabled(has_img)
 
     def open_contrast_dialog(self):
-        """Open a small dialog to control contrast and brightness similar to ImageJ.
-        Live preview is applied to the currently displayed image in `reg_tif_label`.
-        """
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton
-        from PyQt6.QtCore import Qt
-        from PyQt6.QtGui import QImage, QPixmap
+        """Open enhanced brightness/contrast dialog with histogram display and per-channel controls."""
+        print("DEBUG: BnC button clicked!")
 
-        # If CNB disabled, do nothing
-        if not getattr(self.window, '_cnb_active', False):
+        # Check if we have image data
+        tif = getattr(self.window, '_current_tif', None)
+        tif_chan2 = getattr(self.window, '_current_tif_chan2', None)
+        
+        print(f"DEBUG: tif is None: {tif is None}")
+        if tif is not None:
+            print(f"DEBUG: tif shape: {tif.shape}")
+        
+        if tif is None:
+            print("DEBUG: No image data, returning")
             return
 
-        if getattr(self.window, '_current_image_np', None) is None:
-            return
-
-        # If already open, raise
+        # If already open, raise existing dialog
         if getattr(self.window, '_cnb_window', None) and self.window._cnb_window.isVisible():
+            print("DEBUG: Dialog already open, raising")
             self.window._cnb_window.raise_()
             return
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Contrast & Brightness")
-        dlg.setModal(False)
-        vbox = QVBoxLayout()
-
-        # Contrast slider (multiplier)
-        contrast_val = getattr(self.window, '_cnb_contrast', 1.0)
-        contrast_label = QLabel(f"Contrast: {contrast_val:.2f}x")
-        contrast_slider = QSlider(Qt.Orientation.Horizontal)
-        contrast_slider.setMinimum(10)   # 0.1x
-        contrast_slider.setMaximum(300)  # 3.0x
-        contrast_slider.setValue(int(contrast_val * 100))
-
-        # Min/Max intensity sliders (ImageJ-style). Initialize to image range using helper
-        img = getattr(self.window, '_current_image_np', None)
         try:
-            # delegate to scripts/contrast for a robust min/max guess
-            from scripts.contrast import compute_cnb_min_max
-            img_min, img_max = compute_cnb_min_max(img)
-        except Exception:
-            img_min, img_max = (0.0, 255.0) if img is None else (float(np.nanmin(img)), float(np.nanmax(img)))
-
-        if getattr(self.window, '_cnb_min', None) is None:
-            self.window._cnb_min = img_min
-        if getattr(self.window, '_cnb_max', None) is None:
-            self.window._cnb_max = img_max
-
-        min_label = QLabel(f"Min: {self.window._cnb_min:.0f}")
-        min_slider = QSlider(Qt.Orientation.Horizontal)
-        # choose sensible slider range based on image dtype and measured range
-        if img is not None:
-            if img.dtype == np.uint8:
-                slider_min = 0
-                slider_max = 255
-            elif img.dtype == np.uint16:
-                slider_min = 0
-                slider_max = 65535
+            # Get current frame data for histogram
+            frame_idx = int(self.tif_slider.value()) if hasattr(self, 'tif_slider') else 0
+            print(f"DEBUG: frame_idx: {frame_idx}")
+            
+            # Extract current frame data
+            if tif.ndim >= 3:
+                ch1_data = tif[frame_idx] if tif.ndim >= 3 else tif
+                ch2_data = tif_chan2[frame_idx] if tif_chan2 is not None and tif_chan2.ndim >= 3 else tif_chan2
             else:
-                slider_min = int(max(0, np.floor(float(img.min()))))
-                slider_max = int(max(slider_min + 1, np.ceil(float(img.max()))))
-        else:
-            slider_min, slider_max = 0, 65535
-        min_slider.setMinimum(int(slider_min))
-        min_slider.setMaximum(int(slider_max))
-        min_slider.setValue(int(self.window._cnb_min))
+                ch1_data = tif
+                ch2_data = tif_chan2
+                
+            print(f"DEBUG: ch1_data shape: {ch1_data.shape if ch1_data is not None else None}")
+            print(f"DEBUG: ch2_data shape: {ch2_data.shape if ch2_data is not None else None}")
+            
+            # Import and create the BnC dialog
+            print("DEBUG: Importing BnC dialog...")
+            from tools.bnc import BnCDialog, apply_bnc_to_image, create_qimage_from_array, create_composite_image
+            print("DEBUG: Import successful")
+            
+            # Initialize global BnC settings if they don't exist
+            if not hasattr(self.window, '_global_bnc_settings'):
+                self.window._global_bnc_settings = {
+                    'ch1': {'min': 0, 'max': 255, 'contrast': 1.0},
+                    'ch2': {'min': 0, 'max': 255, 'contrast': 1.0},
+                    'enabled': True
+                }
+                print("DEBUG: Initialized global BnC settings")
+            
+            # Create and setup dialog
+            print("DEBUG: Creating BnC dialog...")
+            dlg = BnCDialog(self)
+            print("DEBUG: Dialog created")
+            
+            print("DEBUG: Setting image data...")
+            dlg.set_image_data(ch1_data, ch2_data)
+            
+            # Load existing global settings into dialog
+            dlg.set_settings(self.window._global_bnc_settings)
+            print("DEBUG: Loaded existing settings into dialog")
+            
+            print("DEBUG: Image data set")
+            
+            # Connect settings changes to live preview and global storage
+            print("DEBUG: Connecting signals...")
+            dlg.settings_changed.connect(self._on_bnc_settings_changed)
+            print("DEBUG: Signals connected")
+            
+            # Store reference and show
+            print("DEBUG: Showing dialog...")
+            self.window._cnb_window = dlg
+            dlg.show()
+            print("DEBUG: Dialog should be visible now")
+            
+        except Exception as e:
+            print(f"DEBUG: Exception in open_contrast_dialog: {e}")
+            import traceback
+            traceback.print_exc()
 
-        max_label = QLabel(f"Max: {self.window._cnb_max:.0f}")
-        max_slider = QSlider(Qt.Orientation.Horizontal)
-        max_slider.setMinimum(int(slider_min))
-        max_slider.setMaximum(int(slider_max))
-        max_slider.setValue(int(self.window._cnb_max))
+    def _on_bnc_settings_changed(self, settings):
+        """Handle BnC settings changes and update live preview."""
+        try:
+            # Store settings globally for persistence across frames/directories
+            if not hasattr(self.window, '_global_bnc_settings'):
+                self.window._global_bnc_settings = {
+                    'ch1': {'min': 0, 'max': 255, 'contrast': 1.0},
+                    'ch2': {'min': 0, 'max': 255, 'contrast': 1.0},
+                    'enabled': True
+                }
+            
+            channel_key = 'ch1' if settings['channel'] == 0 else 'ch2'
+            self.window._global_bnc_settings[channel_key] = {
+                'min': settings['min'],
+                'max': settings['max'], 
+                'contrast': settings['contrast']
+            }
+            self.window._global_bnc_settings['enabled'] = True
+            
+            print(f"DEBUG: Updated global BnC settings for {channel_key}: {self.window._global_bnc_settings[channel_key]}")
+            
+            # Apply live preview
+            self._apply_bnc_live_preview()
+        except Exception as e:
+            print(f"DEBUG: Error in BnC settings changed: {e}")
 
-        def on_contrast_change(val):
-            self.window._cnb_contrast = val / 100.0
-            contrast_label.setText(f"Contrast: {self.window._cnb_contrast:.2f}x")
-            self._apply_cnb_adjustments()
-
-        def on_min_change(val):
-            # Ensure min doesn't exceed max-1
-            val = float(val)
-            if val >= float(self.window._cnb_max):
-                val = float(self.window._cnb_max) - 1.0
-            self.window._cnb_min = val
-            min_label.setText(f"Min: {self.window._cnb_min:.0f}")
-            self._apply_cnb_adjustments()
-
-        def on_max_change(val):
-            val = float(val)
-            if val <= float(self.window._cnb_min):
-                val = float(self.window._cnb_min) + 1.0
-            self.window._cnb_max = val
-            max_label.setText(f"Max: {self.window._cnb_max:.0f}")
-            self._apply_cnb_adjustments()
-
-        contrast_slider.valueChanged.connect(on_contrast_change)
-        min_slider.valueChanged.connect(on_min_change)
-        max_slider.valueChanged.connect(on_max_change)
-
-        btn_h = QHBoxLayout()
-        reset_btn = QPushButton("Reset")
-        auto_btn = QPushButton("Auto")
-        close_btn = QPushButton("Close")
-
-        def on_reset():
-            # reset to image native min/max and contrast
-            img2 = getattr(self.window, '_current_image_np', None)
-            if img2 is not None:
-                if img2.ndim == 3:
-                    lum2 = (0.299 * img2[..., 0] + 0.587 * img2[..., 1] + 0.114 * img2[..., 2]).ravel()
-                else:
-                    lum2 = img2.ravel()
-                self.window._cnb_min = float(lum2.min())
-                self.window._cnb_max = float(lum2.max())
-            else:
-                self.window._cnb_min = 0.0
-                self.window._cnb_max = 255.0
-            self.window._cnb_contrast = 1.0
-            contrast_slider.setValue(100)
-            min_slider.setValue(int(self.window._cnb_min))
-            max_slider.setValue(int(self.window._cnb_max))
-            self._apply_cnb_adjustments()
-
-        def on_close():
-            dlg.close()
-
-        def on_auto():
-            # Use the shared helper in scripts/contrast.py to choose a sensible
-            # auto window (percentile clipping). This replaces the long local
-            # histogram-based implementation.
-            img2 = getattr(self.window, '_current_image_np', None)
-            if img2 is None:
+    def _apply_bnc_live_preview(self):
+        """Apply BnC settings to create live preview of the image."""
+        from tools.bnc import apply_bnc_to_image, create_qimage_from_array, create_composite_image
+        from PyQt6.QtGui import QPixmap
+        
+        try:
+            tif = getattr(self.window, '_current_tif', None)
+            tif_chan2 = getattr(self.window, '_current_tif_chan2', None)
+            
+            if tif is None:
                 return
-            try:
-                # a small symmetric tail clip (0.35%) like ImageJ
-                sat = 0.35
-                vals = np.asarray(img2).ravel()
-                # ignore NaNs
-                lo, hi = float(np.nanpercentile(vals, sat)), float(np.nanpercentile(vals, 100.0 - sat))
-            except Exception:
-                lo, hi = float(np.nanmin(img2)), float(np.nanmax(img2))
-
-            self.window._cnb_min = lo
-            self.window._cnb_max = hi
-            min_slider.setValue(int(max(int(slider_min), int(np.floor(self.window._cnb_min)))))
-            max_slider.setValue(int(min(int(slider_max), int(np.ceil(self.window._cnb_max)))))
-            self._apply_cnb_adjustments()
-
-        reset_btn.clicked.connect(on_reset)
-        auto_btn.clicked.connect(on_auto)
-        close_btn.clicked.connect(on_close)
-
-        btn_h.addWidget(reset_btn)
-        btn_h.addWidget(auto_btn)
-        btn_h.addWidget(close_btn)
-
-        vbox.addWidget(contrast_label)
-        vbox.addWidget(contrast_slider)
-        vbox.addWidget(min_label)
-        vbox.addWidget(min_slider)
-        vbox.addWidget(max_label)
-        vbox.addWidget(max_slider)
-        vbox.addLayout(btn_h)
-
-        dlg.setLayout(vbox)
-        self.window._cnb_window = dlg
-        dlg.show()
+                
+            # Get current frame data
+            frame_idx = int(self.tif_slider.value()) if hasattr(self, 'tif_slider') else 0
+            
+            if tif.ndim >= 3:
+                ch1_data = tif[frame_idx]
+                ch2_data = tif_chan2[frame_idx] if tif_chan2 is not None and tif_chan2.ndim >= 3 else tif_chan2
+            else:
+                ch1_data = tif
+                ch2_data = tif_chan2
+                
+            # Get global BnC settings
+            settings = getattr(self.window, '_global_bnc_settings', {
+                'ch1': {'min': 0, 'max': 255, 'contrast': 1.0},
+                'ch2': {'min': 0, 'max': 255, 'contrast': 1.0},
+                'enabled': True
+            })
+            
+            if not settings.get('enabled', True):
+                return
+            
+            # Create preview image
+            if ch2_data is not None and hasattr(self, 'composite_button') and self.composite_button.isChecked():
+                # Composite mode
+                preview_img = create_composite_image(ch1_data, ch2_data, settings['ch1'], settings['ch2'])
+            else:
+                # Single channel mode
+                active_ch = getattr(self, "_active_channel", 1)
+                if ch2_data is not None and active_ch == 2:
+                    # Show channel 2
+                    preview_img = apply_bnc_to_image(ch2_data, settings['ch2']['min'], settings['ch2']['max'], settings['ch2']['contrast'])
+                    # Convert to RGBA grayscale
+                    if preview_img.ndim == 2:
+                        h, w = preview_img.shape
+                        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+                        rgba[..., :3] = preview_img[..., None]
+                        rgba[..., 3] = 255
+                        preview_img = rgba
+                else:
+                    # Show channel 1
+                    preview_img = apply_bnc_to_image(ch1_data, settings['ch1']['min'], settings['ch1']['max'], settings['ch1']['contrast'])
+                    # Convert to RGBA grayscale
+                    if preview_img.ndim == 2:
+                        h, w = preview_img.shape
+                        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+                        rgba[..., :3] = preview_img[..., None]
+                        rgba[..., 3] = 255
+                        preview_img = rgba
+            
+            # Convert to QImage and display
+            if preview_img is not None:
+                qimg = create_qimage_from_array(preview_img)
+                pixmap = QPixmap.fromImage(qimg)
+                scaled_pixmap = pixmap.scaled(
+                    self.reg_tif_label.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self.reg_tif_label.setPixmap(scaled_pixmap)
+                
+        except Exception as e:
+            print(f"DEBUG: Error applying BnC live preview: {e}")
 
     def _apply_cnb_adjustments(self):
-        """Apply contrast (scale) and brightness (offset) to the current image numpy array
-        and update `reg_tif_label` with a preview.
-        """
-        # No-op when CNB disabled
-        if not getattr(self.window, '_cnb_active', False):
+        """Legacy method - redirects to new BnC live preview system."""
+        # If the new BnC dialog system is active, use that
+        if hasattr(self.window, '_global_bnc_settings') and self.window._global_bnc_settings.get('enabled', False):
+            self._apply_bnc_live_preview()
             return
 
-        from scripts.contrast import compute_cnb_min_max, apply_cnb_to_uint8, qimage_from_uint8
-
+        # Fallback to old system if no new settings exist
+        from PyQt6.QtGui import QPixmap
+        
         if getattr(self.window, '_current_image_np', None) is None:
             return
 
+        # Use basic contrast/brightness adjustment
         img = self.window._current_image_np
-        # Ensure min/max exist
-        if getattr(self.window, '_cnb_min', None) is None or getattr(self.window, '_cnb_max', None) is None:
-            lo, hi = compute_cnb_min_max(img)
-            self.window._cnb_min = lo
-            self.window._cnb_max = hi
+        contrast = float(getattr(self.window, '_cnb_contrast', 1.0))
+        
+        # Apply simple contrast adjustment
+        if img.dtype == np.uint8:
+            adjusted = img.astype(np.float32)
+            adjusted = ((adjusted - 128) * contrast) + 128
+            adjusted = np.clip(adjusted, 0, 255).astype(np.uint8)
+        else:
+            adjusted = img
+            
+        if adjusted.ndim == 2:
+            h, w = adjusted.shape
+            rgba = np.zeros((h, w, 4), dtype=np.uint8)
+            rgba[..., :3] = adjusted[..., None]
+            rgba[..., 3] = 255
+            adjusted = rgba
+        elif adjusted.ndim == 3 and adjusted.shape[2] == 3:
+            h, w = adjusted.shape[:2]
+            rgba = np.zeros((h, w, 4), dtype=np.uint8)
+            rgba[..., :3] = adjusted
+            rgba[..., 3] = 255
+            adjusted = rgba
 
-        lo = float(self.window._cnb_min)
-        hi = float(self.window._cnb_max)
-        c = float(getattr(self.window, '_cnb_contrast', 1.0))
-
-        img_u8 = apply_cnb_to_uint8(img, lo, hi, c)
-        from PyQt6.QtGui import QPixmap
-        qimg = qimage_from_uint8(img_u8)
-        pix = QPixmap.fromImage(qimg)
-        self.reg_tif_label.setPixmap(pix.scaled(self.reg_tif_label.size(), Qt.AspectRatioMode.KeepAspectRatio))
+        try:
+            from PyQt6.QtGui import QImage
+            qimg = QImage(adjusted.data, adjusted.shape[1], adjusted.shape[0], adjusted.shape[1] * 4, QImage.Format.Format_RGBA8888)
+            pix = QPixmap.fromImage(qimg)
+            self.reg_tif_label.setPixmap(pix.scaled(self.reg_tif_label.size(), Qt.AspectRatioMode.KeepAspectRatio))
+        except Exception as e:
+            print(f"DEBUG: Error in legacy CNB adjustment: {e}")
 
     def _update_trace_from_roi(self, index=None):
         if self.window._current_tif is None or getattr(self.window, '_last_roi_xyxy', None) is None:
@@ -1609,14 +2010,28 @@ class AnalysisWidget(QWidget):
         from PyQt6.QtCore import Qt
         
         if event.key() == Qt.Key.Key_Escape:
-            self._clear_roi_and_trace()
+            # Clear only the current interactive selection and trace; keep saved ROIs visible
+            try:
+                if hasattr(self, 'roi_tool') and self.roi_tool is not None and hasattr(self.roi_tool, 'clear_selection'):
+                    self.roi_tool.clear_selection()
+                else:
+                    # fallback to legacy clear which clears selection too
+                    self._clear_roi_and_trace()
+            except Exception:
+                try:
+                    self._clear_roi_and_trace()
+                except Exception:
+                    pass
             event.accept()
         # Else if R is pressed and an ROI box is drawn
         elif event.key() == Qt.Key.Key_R:
-            self._on_add_roi_clicked
+            self._on_add_roi_clicked()
             event.accept()
         elif event.key() == Qt.Key.Key_Delete:
             self._on_remove_roi_clicked()
+            event.accept()
+        elif event.key() == Qt.Key.Key_S and event.modifiers() == Qt.KeyboardModifier.AltModifier:
+            self._load_stimulated_rois()
             event.accept()
         else:
             super().keyPressEvent(event)
@@ -1625,7 +2040,17 @@ class AnalysisWidget(QWidget):
         """Clear the current ROI selection and restart the trace plot."""
         # Clear the ROI selection
         if hasattr(self, 'roi_tool') and self.roi_tool is not None:
-            self.roi_tool.clear()
+            # Use clear_selection to preserve saved ROIs; clear() removes everything
+            try:
+                if hasattr(self.roi_tool, 'clear_selection'):
+                    self.roi_tool.clear_selection()
+                else:
+                    self.roi_tool.clear()
+            except Exception:
+                try:
+                    self.roi_tool.clear()
+                except Exception:
+                    pass
         
         # Clear the stored ROI coordinates
         if hasattr(self.window, '_last_roi_xyxy'):
@@ -1659,4 +2084,82 @@ class AnalysisWidget(QWidget):
             self.trace_fig.tight_layout()
             self.trace_canvas.draw()
 
-    # toggle_channel removed from widget; MainWindow.toggle_channel is the single source of truth
+    def _load_stimulated_rois(self):
+        """Load stimulated ROIs from the current folder and add them as S1, S2, etc."""
+        # Get current directory
+        current_item = self.analysis_list_widget.currentItem()
+        if not current_item:
+            return
+        
+        # Get the full path from UserRole, fallback to text for compatibility
+        reg_dir = current_item.data(Qt.ItemDataRole.UserRole)
+        if reg_dir is None:
+            reg_dir = current_item.text()
+        
+        # Remove any existing stimulated ROIs (S1, S2, etc.)
+        self._clear_stimulated_rois()
+        
+        # Get stimulated ROIs from experiment data
+        stim_rois = self._get_stim_rois_from_experiment()
+        if not stim_rois:
+            return
+        
+        # Add each stimulated ROI to the saved ROIs list
+        for i, roi_info in enumerate(stim_rois, 1):
+            roi_name = f"S{i}"
+            xyxy = roi_info.get('xyxy')
+            if xyxy:
+                # Add to saved ROIs list with a distinctive color
+                roi_data = {
+                    'name': roi_name,
+                    'xyxy': xyxy,
+                    'color': (255, 0, 255, 180)  # Magenta color for stimulated ROIs
+                }
+                
+                # Add to window's saved ROIs if it exists
+                if not hasattr(self.window, '_saved_rois'):
+                    self.window._saved_rois = []
+                self.window._saved_rois.append(roi_data)
+                
+                # Add to ROI list widget
+                from PyQt6.QtWidgets import QListWidgetItem
+                from PyQt6.QtGui import QColor
+                item = QListWidgetItem(roi_name)
+                item.setData(Qt.ItemDataRole.UserRole, roi_data)
+                # Set text color to match ROI color
+                item.setForeground(QColor(255, 0, 255))
+                self.roi_list_widget.addItem(item)
+        
+        # Update ROI tool with new saved ROIs
+        if hasattr(self, 'roi_tool') and self.roi_tool:
+            try:
+                self.roi_tool.set_saved_rois(getattr(self.window, '_saved_rois', []))
+            except Exception:
+                pass
+        
+        print(f"Loaded {len(stim_rois)} stimulated ROIs from {reg_dir}")
+
+    def _clear_stimulated_rois(self):
+        """Remove all stimulated ROIs (S1, S2, etc.) from the saved ROIs list."""
+        # Remove from window's saved ROIs
+        if hasattr(self.window, '_saved_rois'):
+            self.window._saved_rois = [roi for roi in self.window._saved_rois 
+                                     if not roi.get('name', '').startswith('S')]
+        
+        # Remove from ROI list widget
+        items_to_remove = []
+        for i in range(self.roi_list_widget.count()):
+            item = self.roi_list_widget.item(i)
+            if item and item.text().startswith('S') and item.text()[1:].isdigit():
+                items_to_remove.append(i)
+        
+        # Remove items in reverse order to maintain indices
+        for i in reversed(items_to_remove):
+            self.roi_list_widget.takeItem(i)
+        
+        # Update ROI tool
+        if hasattr(self, 'roi_tool') and self.roi_tool:
+            try:
+                self.roi_tool.set_saved_rois(getattr(self.window, '_saved_rois', []))
+            except Exception:
+                pass

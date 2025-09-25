@@ -1,5 +1,3 @@
-# Analysis functionality has been successfully moved to AnalysisWidget
-
 import sys
 import os
 import subprocess
@@ -20,9 +18,9 @@ from models.dir_manager import DirManager
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Phasor Handler v1.0")
+        self.setWindowTitle("Phasor Handler v2.0")
         self.setWindowIcon(QIcon('img/logo.ico'))
-        self.setFixedSize(1400, 1000)
+        self.setMinimumSize(1400, 1000)
         # central directory manager (shared with widgets)
         self.dir_manager = DirManager()
         # expose legacy attribute for compatibility
@@ -82,7 +80,13 @@ class MainWindow(QMainWindow):
         selected_items = widget.selectedItems()
         if not selected_items:
             return
-        to_remove = [item.text() for item in selected_items]
+        to_remove = []
+        for item in selected_items:
+            # Get the full path from UserRole, fallback to text for compatibility
+            full_path = item.data(Qt.ItemDataRole.UserRole)
+            if full_path is None:
+                full_path = item.text()
+            to_remove.append(full_path)
         # update model; UI will refresh on signal
         self.dir_manager.remove(to_remove)
         self.refresh_dir_lists()
@@ -100,16 +104,26 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'analysis_list_widget'):
             self.analysis_list_widget.clear()
 
-        for d in self.dir_manager.list():
+        from PyQt6.QtWidgets import QListWidgetItem
+        for full_path, display_name in self.dir_manager.get_display_names():
             if hasattr(self, 'conv_list_widget'):
-                self.conv_list_widget.addItem(d)
+                item = QListWidgetItem(display_name)
+                item.setToolTip(full_path)
+                item.setData(Qt.ItemDataRole.UserRole, full_path)
+                self.conv_list_widget.addItem(item)
             if hasattr(self, 'reg_list_widget'):
                 try:
-                    self.reg_list_widget.addItem(d)
+                    item = QListWidgetItem(display_name)
+                    item.setToolTip(full_path)
+                    item.setData(Qt.ItemDataRole.UserRole, full_path)
+                    self.reg_list_widget.addItem(item)
                 except RuntimeError:
                     pass
             if hasattr(self, 'analysis_list_widget'):
-                self.analysis_list_widget.addItem(d)
+                item = QListWidgetItem(display_name)
+                item.setToolTip(full_path)
+                item.setData(Qt.ItemDataRole.UserRole, full_path)
+                self.analysis_list_widget.addItem(item)
 
     def on_tab_changed(self, idx):
         # When switching to analysis tab, refresh its directory list
@@ -117,8 +131,12 @@ class MainWindow(QMainWindow):
         if tab_text == "Analysis":
             if hasattr(self, 'analysis_list_widget'):
                 self.analysis_list_widget.clear()
-                for d in self.selected_dirs:
-                    self.analysis_list_widget.addItem(d)
+                from PyQt6.QtWidgets import QListWidgetItem
+                for full_path, display_name in self.dir_manager.get_display_names():
+                    item = QListWidgetItem(display_name)
+                    item.setToolTip(full_path)
+                    item.setData(Qt.ItemDataRole.UserRole, full_path)
+                    self.analysis_list_widget.addItem(item)
 
     def run_conversion_script(self):
         if not self.selected_dirs:
@@ -166,7 +184,15 @@ class MainWindow(QMainWindow):
 
     def run_registration_script(self):
         # Gather inputs and start a background worker so the GUI doesn't block
-        selected_dirs = [self.reg_list_widget.item(i).text() for i in range(self.reg_list_widget.count())]
+        selected_dirs = []
+        for i in range(self.reg_list_widget.count()):
+            item = self.reg_list_widget.item(i)
+            if item is not None:
+                # Get full path from UserRole, fallback to text for compatibility
+                full_path = item.data(Qt.ItemDataRole.UserRole)
+                if full_path is None:
+                    full_path = item.text()
+                selected_dirs.append(full_path)
         if not selected_dirs:
             QMessageBox.warning(self, "No Directories", "Please add at least one directory to the list before running registration.")
             return
