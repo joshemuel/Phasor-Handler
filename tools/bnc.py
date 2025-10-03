@@ -263,12 +263,21 @@ class BnCDialog(QDialog):
                 data_min = float(np.min(norm_data))
                 data_max = float(np.max(norm_data))
                 
-                # ImageJ-style initialization
+                # Initialize with proper brightness and contrast values
+                center = (data_min + data_max) / 2.0
+                width = data_max - data_min
+                
+                # Calculate proper contrast value for full range
+                if width <= 127.5:
+                    contrast = (width - 1) / 126.5 * 128.0
+                else:
+                    contrast = 128.0 + (width - 127.5) / 127.5 * 127.0
+                
                 self._settings[key] = {
                     'min': data_min,
                     'max': data_max,
-                    'brightness': 128.0,  # Center value (0-255 range)
-                    'contrast': 128.0     # Center value (0-255 range)
+                    'brightness': center,  # Center position
+                    'contrast': contrast   # Based on actual width
                 }
                 
     def _normalize_to_255(self, data):
@@ -317,10 +326,19 @@ class BnCDialog(QDialog):
         # Normalize data to 0-255 for histogram display
         norm_data = self._normalize_to_255(current_data)
         
+        # Determine color based on current channel
+        if self._current_channel == 0:
+            hist_color = 'green'
+            channel_name = 'Ch1 (Green)'
+        else:
+            hist_color = 'red'
+            channel_name = 'Ch2 (Red)'
+        
         # Create histogram
         counts, bins, patches = self.hist_ax.hist(
-            norm_data, bins=256, range=(0, 255), 
-            color='white', alpha=0.7, edgecolor='none'
+            norm_data.flatten(), bins=256, range=(0, 255), 
+            color=hist_color, alpha=0.6, edgecolor='none',
+            label=f'{channel_name} Histogram'
         )
         
         # Style the histogram
@@ -344,29 +362,38 @@ class BnCDialog(QDialog):
         self._min_line = self.hist_ax.axvline(min_val, color='cyan', linewidth=2, label=f'Min: {min_val:.0f}')
         self._max_line = self.hist_ax.axvline(max_val, color='magenta', linewidth=2, label=f'Max: {max_val:.0f}')
         
-        # Add linear transformation line (ImageJ style)
+        # Add linear transformation line connecting min and max
         if max_val > min_val:
-            # Draw linear line from (min_val, 0) to (max_val, max_height)
-            max_hist_height = max_count * 0.9  # Scale to 90% of max height
+            # Draw linear gradient line from min to max
+            max_hist_height = max_count * 0.8  # Scale to 80% of max height
             
-            # Linear line coordinates
+            # Create gradient line coordinates
             x_line = [min_val, max_val]
             y_line = [0, max_hist_height]
             
             # Draw the linear transformation line
             self.hist_ax.plot(x_line, y_line, color='yellow', linewidth=3, 
-                            label=f'Linear Transform', alpha=0.8)
-                            
-            # Add brightness/contrast info to legend
-            brightness_pct = (brightness - 128) / 128 * 100
-            contrast_pct = (contrast - 128) / 128 * 100
-            self.hist_ax.text(0.02, 0.98, f'Brightness: {brightness_pct:+.0f}%\nContrast: {contrast_pct:+.0f}%', 
-                            transform=self.hist_ax.transAxes, verticalalignment='top',
-                            bbox=dict(boxstyle='round', facecolor='black', alpha=0.7),
-                            color='white', fontsize=10)
+                            label=f'Linear Gradient', alpha=0.9, linestyle='-')
+            
+            # Add gradient visualization using a filled polygon
+            gradient_x = np.linspace(min_val, max_val, 50)
+            gradient_y = np.linspace(0, max_hist_height, 50)
+            self.hist_ax.fill_between(gradient_x, 0, gradient_y, 
+                                    color='yellow', alpha=0.2, label='Transform Range')
+        
+        # Add info text
+        info_text = f'Min: {min_val:.0f}  Max: {max_val:.0f}\n'
+        info_text += f'Brightness: {brightness:.0f}  Contrast: {contrast:.0f}\n'
+        info_text += f'Range: {max_val - min_val:.0f}  Center: {(min_val + max_val)/2:.0f}'
+        
+        self.hist_ax.text(0.02, 0.98, info_text, 
+                        transform=self.hist_ax.transAxes, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='black', alpha=0.8),
+                        color='white', fontsize=9)
         
         # Add legend
-        self.hist_ax.legend(facecolor='black', edgecolor='white', labelcolor='white', loc='upper right')
+        self.hist_ax.legend(facecolor='black', edgecolor='white', labelcolor='white', 
+                          loc='upper right', fontsize=9)
         
         self.hist_canvas.draw()
         
@@ -420,7 +447,10 @@ class BnCDialog(QDialog):
         # Update brightness/contrast based on new min/max
         self._update_brightness_contrast_from_minmax()
         
-        # Delayed update
+        # Update histogram immediately
+        self._update_histogram()
+        
+        # Delayed signal emission
         self._update_timer.start(50)  # 50ms delay for debouncing
         
     def _on_max_changed(self, value):
@@ -439,52 +469,37 @@ class BnCDialog(QDialog):
         # Update brightness/contrast based on new min/max
         self._update_brightness_contrast_from_minmax()
         
-        # Delayed update
+        # Update histogram immediately
+        self._update_histogram()
+        
+        # Delayed signal emission
         self._update_timer.start(50)  # 50ms delay for debouncing
         
     def _update_brightness_contrast_from_minmax(self):
         """Update brightness/contrast sliders based on current min/max values."""
         settings_key = self._get_current_settings_key()
-        current_data = self._get_current_data()
         
-        if current_data is None:
-            return
-            
-        # Get full data range
-        norm_data = self._normalize_to_255(current_data)
-        default_min = float(np.min(norm_data))
-        default_max = float(np.max(norm_data))
-        default_range = default_max - default_min
-        
-        if default_range <= 0:
-            return
-            
         # Get current values
         current_min = self._settings[settings_key]['min']
         current_max = self._settings[settings_key]['max']
-        center = current_min + (current_max - current_min) / 2.0
         
-        # Calculate brightness (reverse of the brightness calculation)
-        normalized_center = (center - default_min) / default_range
-        brightness = (1.0 - normalized_center) * 255.0
+        # Calculate brightness from center position
+        center = (current_min + current_max) / 2.0
+        brightness = center  # Direct mapping: center position = brightness value
         brightness = max(0, min(255, brightness))
         
-        # Calculate contrast (reverse of the contrast calculation)
-        current_range = current_max - current_min
-        if current_range > 0:
-            # Use slope calculation to find contrast value
-            slope = (default_range / 2.0) / (current_range / 2.0)
-            
-            # Reverse the slope calculation
-            mid = 127.5  # 255/2
-            if slope <= 1.0:
-                contrast = slope * mid
-            else:
-                contrast = 255.0 - (mid / slope)
-                
-            contrast = max(0, min(255, contrast))
+        # Calculate contrast from width
+        width = current_max - current_min
+        
+        # Reverse the contrast calculation
+        if width <= 127.5:
+            # Low to medium contrast
+            contrast = (width - 1) / 126.5 * 128.0
         else:
-            contrast = 255  # Maximum contrast when range is 0
+            # Medium to high contrast
+            contrast = 128.0 + (width - 127.5) / 127.5 * 127.0
+            
+        contrast = max(0, min(255, contrast))
             
         # Update settings and UI
         self._settings[settings_key]['brightness'] = brightness
@@ -500,53 +515,36 @@ class BnCDialog(QDialog):
         self.contrast_slider.blockSignals(False)
         
     def _on_brightness_changed(self, value):
-        """Handle brightness slider change (ImageJ style)."""
+        """Handle brightness slider change - shifts min and max together."""
         settings_key = self._get_current_settings_key()
-        current_data = self._get_current_data()
         
-        if current_data is None:
-            return
-            
-        # Get full data range
-        norm_data = self._normalize_to_255(current_data)
-        default_min = float(np.min(norm_data))
-        default_max = float(np.max(norm_data))
-        default_range = default_max - default_min
-        
-        if default_range <= 0:
-            return
-            
-        # ImageJ brightness calculation:
-        # Brightness moves the center point while maintaining window width
-        brightness = float(value)  # 0-255 range
-        
-        # Calculate normalized brightness: 1.0 - (brightness / 255.0)
-        # This matches ImageJ's brightness behavior
-        normalized_brightness = 1.0 - (brightness / 255.0)
-        
-        # Calculate center point
-        center = default_min + (default_range * normalized_brightness)
-        
-        # Get current window width
+        # Get current min/max values and calculate current center
         current_min = self._settings[settings_key]['min']
         current_max = self._settings[settings_key]['max']
-        width = current_max - current_min
+        current_center = (current_min + current_max) / 2.0
+        half_width = (current_max - current_min) / 2.0
         
-        # Apply brightness by moving center while maintaining width
-        new_min = center - width / 2.0
-        new_max = center + width / 2.0
+        # Brightness value maps to center position (0-255 range)
+        # 0 = center at 0, 128 = center at 127.5, 255 = center at 255
+        brightness = float(value)
+        new_center = brightness
         
-        # Clamp to valid range
-        new_min = max(default_min, min(new_min, default_max - width))
-        new_max = min(default_max, max(new_max, default_min + width))
+        # Calculate new min/max maintaining the current width
+        new_min = new_center - half_width
+        new_max = new_center + half_width
         
-        # If clamping changed the width, adjust the other bound
-        if new_max - new_min != width:
-            if new_min == default_min:
-                new_max = new_min + width
-            elif new_max == default_max:
-                new_min = new_max - width
-        
+        # Clamp to valid range (0-255) while maintaining width if possible
+        if new_min < 0:
+            new_min = 0
+            new_max = new_min + 2 * half_width
+        elif new_max > 255:
+            new_max = 255
+            new_min = new_max - 2 * half_width
+            
+        # Ensure minimum width of 1
+        if new_max - new_min < 1:
+            new_max = new_min + 1
+            
         # Update settings
         self._settings[settings_key]['min'] = new_min
         self._settings[settings_key]['max'] = new_max
@@ -563,61 +561,47 @@ class BnCDialog(QDialog):
         self.min_slider.blockSignals(False)
         self.max_slider.blockSignals(False)
         
-        # Delayed update
-        self._update_timer.start(50)  # 50ms delay for debouncing
+        # Update histogram and emit signal
+        self._update_histogram()
+        self._queue_update('settings')
         
     def _on_contrast_changed(self, value):
-        """Handle contrast slider change (ImageJ style)."""
+        """Handle contrast slider change - adjusts the difference between min and max."""
         settings_key = self._get_current_settings_key()
-        current_data = self._get_current_data()
-        
-        if current_data is None:
-            return
-            
-        # Get full data range
-        norm_data = self._normalize_to_255(current_data)
-        default_min = float(np.min(norm_data))
-        default_max = float(np.max(norm_data))
-        default_range = default_max - default_min
-        
-        if default_range <= 0:
-            return
-            
-        # ImageJ contrast calculation:
-        # Contrast changes window width around center point
-        contrast = float(value)  # 0-255 range
         
         # Get current center point
         current_min = self._settings[settings_key]['min']
         current_max = self._settings[settings_key]['max']
-        center = current_min + (current_max - current_min) / 2.0
+        center = (current_min + current_max) / 2.0
         
-        # Calculate slope based on contrast value
-        # ImageJ uses: slope = cvalue/mid if cvalue <= mid, else mid/(sliderRange-cvalue)
-        slider_range = 255.0
-        mid = slider_range / 2.0
+        # Contrast value maps to window width
+        # 0 = minimum width (1), 128 = medium width, 255 = maximum width (255)
+        contrast = float(value)
         
-        if contrast <= mid:
-            slope = contrast / mid
+        # Map contrast to width: 0->1, 128->127.5, 255->255
+        if contrast <= 128:
+            # Low contrast: narrow window (1 to 127.5)
+            width = 1 + (contrast / 128.0) * 126.5
         else:
-            slope = mid / (slider_range - contrast)
+            # High contrast: wide window (127.5 to 255)
+            width = 127.5 + ((contrast - 128) / 127.0) * 127.5
             
-        if slope > 0.0:
-            # Calculate new min/max based on slope
-            half_range = (default_range / 2.0) / slope
-            new_min = center - half_range
-            new_max = center + half_range
-        else:
-            # If slope is 0, use full range
-            new_min = default_min
-            new_max = default_max
+        half_width = width / 2.0
         
-        # Clamp to valid range
-        new_min = max(default_min, min(new_min, default_max))
-        new_max = min(default_max, max(new_max, default_min))
+        # Calculate new min/max around center
+        new_min = center - half_width
+        new_max = center + half_width
         
-        # Ensure min < max
-        if new_max <= new_min:
+        # Clamp to valid range (0-255)
+        if new_min < 0:
+            new_min = 0
+            new_max = new_min + width
+        elif new_max > 255:
+            new_max = 255
+            new_min = new_max - width
+            
+        # Ensure minimum width of 1
+        if new_max - new_min < 1:
             new_max = new_min + 1
         
         # Update settings
@@ -636,8 +620,9 @@ class BnCDialog(QDialog):
         self.min_slider.blockSignals(False)
         self.max_slider.blockSignals(False)
         
-        # Delayed update
-        self._update_timer.start(50)  # 50ms delay for debouncing
+        # Update histogram and emit signal
+        self._update_histogram()
+        self._queue_update('settings')
         
     def _on_reset(self):
         """Reset current channel to default values."""
@@ -649,11 +634,22 @@ class BnCDialog(QDialog):
         
         # Reset to full range and default brightness/contrast
         norm_data = self._normalize_to_255(current_data)
+        data_min = float(np.min(norm_data))
+        data_max = float(np.max(norm_data))
+        center = (data_min + data_max) / 2.0
+        width = data_max - data_min
+        
+        # Calculate proper contrast value for full range
+        if width <= 127.5:
+            contrast = (width - 1) / 126.5 * 128.0
+        else:
+            contrast = 128.0 + (width - 127.5) / 127.5 * 127.0
+            
         self._settings[settings_key] = {
-            'min': float(np.min(norm_data)),
-            'max': float(np.max(norm_data)),
-            'brightness': 128.0,  # Center value
-            'contrast': 128.0     # Center value
+            'min': data_min,
+            'max': data_max,
+            'brightness': center,  # Center position
+            'contrast': contrast   # Based on actual width
         }
         
         self._update_display()

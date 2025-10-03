@@ -10,7 +10,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
 import numpy as np
 
-from widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
+from widgets import ConversionWidget, RegistrationWidget
+from widgets.analysis import AnalysisWidget
 from tools import misc
 from workers import RegistrationWorker
 from models.dir_manager import DirManager
@@ -20,7 +21,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Phasor Handler v2.0")
         self.setWindowIcon(QIcon('img/logo.ico'))
-        self.setMinimumSize(1400, 1000)
+        # self.setMinimumSize(1400, 1000)
         # central directory manager (shared with widgets)
         self.dir_manager = DirManager()
         # expose legacy attribute for compatibility

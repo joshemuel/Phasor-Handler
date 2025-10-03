@@ -1,8 +1,11 @@
+# TODO: Make it so that ROIs can be removed seamlessly
+
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QRect, QPoint, QSize, QPointF
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
 from PyQt6.QtWidgets import QLabel
 from typing import Optional
 import numpy as np
+import math
 
 
 class CircleRoiTool(QObject):
@@ -14,11 +17,13 @@ class CircleRoiTool(QObject):
     """
     roiChanged = pyqtSignal(tuple)   # (x0, y0, x1, y1) in image coords (during drag)
     roiFinalized = pyqtSignal(tuple) # (x0, y0, x1, y1) in image coords (on release)
+    roiSelected = pyqtSignal(int)    # index of ROI selected by right-click
 
     def __init__(self, label: QLabel, parent=None):
         super().__init__(parent)
         self._label = label
         self._label.setMouseTracking(True)
+        self._label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._label.installEventFilter(self)
 
         # Display geometry
@@ -33,6 +38,7 @@ class CircleRoiTool(QObject):
         # bbox stored as float tuple: (left, top, width, height)
         self._bbox = None
         self._dragging = False
+        self._rotation_angle = 0.0  # rotation angle in radians
 
         # persistent saved ROIs: list of dicts with keys 'name','xyxy','color'
         # color may be a QColor or (r,g,b,a) tuple
@@ -45,11 +51,15 @@ class CircleRoiTool(QObject):
         self._show_saved_rois = True
         self._show_stim_rois = True
         self._show_current_bbox = True
+        self._show_labels = True
 
-        # translation state
-        self._mode = None  # 'draw' or 'translate' or None
+        # interaction modes
+        self._mode = None  # 'draw', 'translate', 'rotate', or None
+        self._interaction_mode = 'translate'  # 'translate' or 'rotate' - toggleable with 'y' key
         self._translate_anchor = None  # QPointF
         self._bbox_origin = None       # (left, top, w, h) float tuple
+        self._rotation_anchor = None   # QPointF for rotation center
+        self._rotation_origin = None   # original angle before rotation starts
 
     # --- Public API you call from app.py when the image view updates ---
 
@@ -74,6 +84,7 @@ class CircleRoiTool(QObject):
         self._start_pos = None
         self._current_pos = None
         self._bbox = None
+        self._rotation_angle = 0.0
         self._dragging = False
         if self._base_pixmap is not None:
             self._label.setPixmap(self._base_pixmap)
@@ -86,9 +97,101 @@ class CircleRoiTool(QObject):
         self._current_pos = None
         self._bbox = None
         self._dragging = False
+        # Keep the current interaction mode active
+        # Don't reset rotation angle - preserve it for the next ROI
+        # self._rotation_angle = 0.0
         # repaint overlay to show saved/stim ROIs
         if self._base_pixmap is not None:
             self._paint_overlay()
+
+    def toggle_interaction_mode(self):
+        """Toggle between translation and rotation modes."""
+        if self._interaction_mode == 'translate':
+            self._interaction_mode = 'rotate'
+            print("Switched to rotation mode - right-click and drag to rotate")
+        else:
+            self._interaction_mode = 'translate'
+            print("Switched to translation mode - right-click and drag to move")
+        
+        # Repaint overlay to show any mode-specific visual cues
+        if self._base_pixmap is not None:
+            self._paint_overlay()
+
+    def _get_bbox_center(self):
+        """Get the center point of the current bbox."""
+        if self._bbox is None:
+            return None
+        left, top, w, h = self._bbox
+        cx = left + w / 2.0
+        cy = top + h / 2.0
+        return QPointF(cx, cy)
+
+    def _calculate_rotation_angle(self, anchor_point, current_point, center_point):
+        """Calculate rotation angle from anchor to current point around center."""
+        # Vector from center to anchor
+        anchor_dx = anchor_point.x() - center_point.x()
+        anchor_dy = anchor_point.y() - center_point.y()
+        
+        # Vector from center to current
+        current_dx = current_point.x() - center_point.x()
+        current_dy = current_point.y() - center_point.y()
+        
+        # Calculate angles
+        anchor_angle = math.atan2(anchor_dy, anchor_dx)
+        current_angle = math.atan2(current_dy, current_dx)
+        
+        # Return the difference
+        return current_angle - anchor_angle
+
+    def _find_roi_at_point(self, point):
+        """Find which saved ROI (if any) contains the given point.
+        Returns the index of the ROI, or None if no ROI contains the point.
+        """
+        if not self._saved_rois:
+            return None
+        
+        # Check saved ROIs in reverse order (last drawn on top)
+        for idx in reversed(range(len(self._saved_rois))):
+            roi = self._saved_rois[idx]
+            xyxy = roi.get('xyxy')
+            if xyxy is None:
+                continue
+                
+            # Convert ROI to label coordinates
+            lbbox = self._label_bbox_from_image_xyxy(xyxy)
+            if lbbox is None:
+                continue
+                
+            lx0, ly0, lw, lh = lbbox
+            rotation_angle = roi.get('rotation', 0.0)
+            
+            # Check if point is inside the ellipse
+            if self._point_in_ellipse(point, lx0, ly0, lw, lh, rotation_angle):
+                return idx
+                
+        return None
+    
+    def _point_in_ellipse(self, point, lx0, ly0, lw, lh, rotation_angle=0.0):
+        """Check if a point is inside an ellipse with given parameters."""
+        cx = lx0 + lw / 2.0
+        cy = ly0 + lh / 2.0
+        rx = lw / 2.0
+        ry = lh / 2.0
+        
+        # Translate point to ellipse center
+        px = point.x() - cx
+        py = point.y() - cy
+        
+        # If there's rotation, rotate the point back
+        if rotation_angle != 0.0:
+            cos_angle = math.cos(-rotation_angle)
+            sin_angle = math.sin(-rotation_angle)
+            px_rot = px * cos_angle - py * sin_angle
+            py_rot = px * sin_angle + py * cos_angle
+            px, py = px_rot, py_rot
+        
+        # Check if point is inside the ellipse
+        return (px * px) / (rx * rx) + (py * py) / (ry * ry) <= 1.0
 
     def set_show_saved_rois(self, show: bool):
         """Toggle visibility of saved ROIs without modifying their data."""
@@ -114,6 +217,14 @@ class CircleRoiTool(QObject):
             self._show_current_bbox = True
         self._paint_overlay()
 
+    def set_show_labels(self, show: bool):
+        """Toggle visibility of text labels within ROIs."""
+        try:
+            self._show_labels = bool(show)
+        except Exception:
+            self._show_labels = True
+        self._paint_overlay()
+
     # --- Event filter for mouse handling and painting overlay ---
 
     def eventFilter(self, obj, event):
@@ -122,6 +233,17 @@ class CircleRoiTool(QObject):
 
         et = event.type()
 
+        # Handle keyboard events for mode switching
+        if et == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Y:
+                # Only allow mode toggle when there's an active ROI
+                if self._bbox is not None:
+                    self.toggle_interaction_mode()
+                    return True
+                else:
+                    print("Draw an ROI first before switching interaction modes")
+                    return True
+
         if et == event.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.LeftButton and self._in_draw_rect(event.position()):
                 # start drawing: left button defines first corner
@@ -129,23 +251,74 @@ class CircleRoiTool(QObject):
                 self._dragging = True
                 self._start_pos = event.position()  # QPointF
                 self._current_pos = self._start_pos
+                # Reset rotation angle for new ROI to ensure default rotation
+                self._rotation_angle = 0.0
+                # Set default interaction mode to translate when drawing new ROI
+                self._interaction_mode = 'translate'
                 self._update_bbox_from_points()
                 self._paint_overlay()
+                print(f"Started drawing new ROI in {self._interaction_mode} mode")
                 return True
 
-            # right button: start translation only if click is inside existing bbox
-            if event.button() == Qt.MouseButton.RightButton and self._bbox is not None:
+            # right button: check for ROI selection first, then translation/rotation
+            if event.button() == Qt.MouseButton.RightButton:
                 p = event.position()  # QPointF
-                left, top, w, h = self._bbox
-                right = left + w
-                bottom = top + h
-                # 1-pixel margin tolerance
-                if (left - 1 <= p.x() <= right + 1) and (top - 1 <= p.y() <= bottom + 1):
-                    self._mode = 'translate'
-                    self._dragging = True
-                    self._translate_anchor = p
-                    self._bbox_origin = (left, top, w, h)
+                
+                # First, check if we're clicking on any saved ROI
+                roi_index = self._find_roi_at_point(p)
+                if roi_index is not None:
+                    # Emit signal to select this ROI in the list widget
+                    self.roiSelected.emit(roi_index)
+                    
+                    # Also set up the clicked ROI as the current bbox for immediate manipulation
+                    roi = self._saved_rois[roi_index]
+                    xyxy = roi.get('xyxy')
+                    rotation_angle = roi.get('rotation', 0.0)
+                    if xyxy is not None:
+                        # Convert to label coordinates and set as current bbox
+                        lbbox = self._label_bbox_from_image_xyxy(xyxy)
+                        if lbbox is not None:
+                            lx0, ly0, lw, lh = lbbox
+                            self._bbox = (lx0, ly0, lw, lh)
+                            self._rotation_angle = rotation_angle
+                            
+                            # Now check if we can start manipulation on this bbox
+                            left, top, w, h = self._bbox
+                            right = left + w
+                            bottom = top + h
+                            # 1-pixel margin tolerance
+                            if (left - 1 <= p.x() <= right + 1) and (top - 1 <= p.y() <= bottom + 1):
+                                if self._interaction_mode == 'translate':
+                                    self._mode = 'translate'
+                                    self._dragging = True
+                                    self._translate_anchor = p
+                                    self._bbox_origin = (left, top, w, h)
+                                else:  # rotation mode
+                                    self._mode = 'rotate'
+                                    self._dragging = True
+                                    self._rotation_anchor = p
+                                    self._rotation_origin = self._rotation_angle
+                                return True
                     return True
+                
+                # If no saved ROI was clicked, check if we're manipulating current bbox
+                if self._bbox is not None:
+                    left, top, w, h = self._bbox
+                    right = left + w
+                    bottom = top + h
+                    # 1-pixel margin tolerance
+                    if (left - 1 <= p.x() <= right + 1) and (top - 1 <= p.y() <= bottom + 1):
+                        if self._interaction_mode == 'translate':
+                            self._mode = 'translate'
+                            self._dragging = True
+                            self._translate_anchor = p
+                            self._bbox_origin = (left, top, w, h)
+                        else:  # rotation mode
+                            self._mode = 'rotate'
+                            self._dragging = True
+                            self._rotation_anchor = p
+                            self._rotation_origin = self._rotation_angle
+                        return True
 
         elif et == event.Type.MouseMove:
             if not self._dragging:
@@ -190,6 +363,18 @@ class CircleRoiTool(QObject):
                     self.roiChanged.emit(xyxy)
                 return True
 
+            elif self._mode == 'rotate' and self._rotation_anchor is not None:
+                # calculate rotation angle based on mouse movement around bbox center
+                center = self._get_bbox_center()
+                if center is not None:
+                    angle_delta = self._calculate_rotation_angle(self._rotation_anchor, pos, center)
+                    self._rotation_angle = self._rotation_origin + angle_delta
+                    self._paint_overlay()
+                    xyxy = self._current_roi_image_coords()
+                    if xyxy is not None:
+                        self.roiChanged.emit(xyxy)
+                return True
+
         elif et == event.Type.MouseButtonRelease:
             if not self._dragging:
                 return False
@@ -210,6 +395,17 @@ class CircleRoiTool(QObject):
                 # finalize translation
                 self._translate_anchor = None
                 self._bbox_origin = None
+                xyxy = self._current_roi_image_coords()
+                if xyxy is not None:
+                    self.roiFinalized.emit(xyxy)
+                self._mode = None
+                return True
+
+            if self._mode == 'rotate' and event.button() == Qt.MouseButton.RightButton:
+                self._dragging = False
+                # finalize rotation
+                self._rotation_anchor = None
+                self._rotation_origin = None
                 xyxy = self._current_roi_image_coords()
                 if xyxy is not None:
                     self.roiFinalized.emit(xyxy)
@@ -263,7 +459,18 @@ class CircleRoiTool(QObject):
         if self._bbox is not None and getattr(self, '_show_current_bbox', True):
             try:
                 left, top, w, h = self._bbox
-                painter.drawEllipse(int(round(left)), int(round(top)), int(round(w)), int(round(h)))
+                if self._rotation_angle != 0.0:
+                    # Draw rotated ellipse
+                    center_x = left + w / 2.0
+                    center_y = top + h / 2.0
+                    painter.save()
+                    painter.translate(center_x, center_y)
+                    painter.rotate(math.degrees(self._rotation_angle))
+                    painter.drawEllipse(int(round(-w/2)), int(round(-h/2)), int(round(w)), int(round(h)))
+                    painter.restore()
+                else:
+                    # Draw normal ellipse
+                    painter.drawEllipse(int(round(left)), int(round(top)), int(round(w)), int(round(h)))
             except Exception:
                 pass
 
@@ -271,7 +478,7 @@ class CircleRoiTool(QObject):
         if getattr(self, '_show_saved_rois', True):
             try:
                 font = QFont()
-                font.setPointSize(12)
+                font.setPointSize(6)
                 font.setBold(True)
                 painter.setFont(font)
                 for idx, saved in enumerate(list(self._saved_rois or [])):
@@ -295,27 +502,60 @@ class CircleRoiTool(QObject):
                         spen = QPen(qcol)
                         spen.setWidth(3)
                         painter.setPen(spen)
-                        painter.drawEllipse(int(round(lx0)), int(round(ly0)), int(round(lw)), int(round(lh)))
-                        # draw label in middle (center text using font metrics)
-                        tx = float(lx0 + lw / 2.0)
-                        ty = float(ly0 + lh / 2.0)
-                        # Show full name if it starts with "S" (stimulated ROIs), otherwise show index
-                        roi_name = saved.get('name', '')
-                        if roi_name and roi_name.startswith('S'):
-                            text = roi_name
+                        
+                        # Check if this saved ROI has rotation
+                        rotation_angle = saved.get('rotation', 0.0)
+                        if rotation_angle != 0.0:
+                            # Draw rotated ellipse
+                            center_x = lx0 + lw / 2.0
+                            center_y = ly0 + lh / 2.0
+                            painter.save()
+                            painter.translate(center_x, center_y)
+                            painter.rotate(math.degrees(rotation_angle))
+                            painter.drawEllipse(int(round(-lw/2)), int(round(-lh/2)), int(round(lw)), int(round(lh)))
+                            painter.restore()
                         else:
-                            text = str(idx + 1)
-                        # choose text color that contrasts (white or black)
-                        text_col = QColor(255, 255, 255)
-                        fm = painter.fontMetrics()
-                        tw = fm.horizontalAdvance(text)
-                        ascent = fm.ascent()
-                        descent = fm.descent()
-                        text_x = int(round(tx - tw / 2.0))
-                        # baseline must be offset so text vertically centers on the ellipse
-                        text_y = int(round(ty + (ascent - descent) / 2.0))
-                        painter.setPen(QPen(text_col))
-                        painter.drawText(text_x, text_y, text)
+                            # Draw normal ellipse
+                            painter.drawEllipse(int(round(lx0)), int(round(ly0)), int(round(lw)), int(round(lh)))
+                        # draw label in middle (center text using font metrics) only if labels are enabled
+                        if getattr(self, '_show_labels', True):
+                            tx = float(lx0 + lw / 2.0)
+                            ty = float(ly0 + lh / 2.0)
+                            # Show full name if it starts with "S" (stimulated ROIs), otherwise extract number from ROI name
+                            roi_name = saved.get('name', '')
+                            if roi_name and roi_name.startswith('S'):
+                                text = roi_name
+                            elif roi_name and roi_name.startswith('ROI '):
+                                # Extract the number from "ROI X" format
+                                try:
+                                    number = roi_name.split('ROI ')[1]
+                                    text = number
+                                except (IndexError, ValueError):
+                                    # Fallback to index + 1 if name parsing fails
+                                    text = str(idx + 1)
+                            else:
+                                # Fallback for non-standard names
+                                text = str(idx + 1)
+                            # choose text color that contrasts (white text)
+                            text_col = QColor(255, 255, 255)
+                            fm = painter.fontMetrics()
+                            tw = fm.horizontalAdvance(text)
+                            ascent = fm.ascent()
+                            descent = fm.descent()
+                            text_x = int(round(tx - tw / 2.0))
+                            # baseline must be offset so text vertically centers on the ellipse
+                            text_y = int(round(ty + (ascent - descent) / 2.0))
+                            
+                            # Draw black background rectangle for better contrast
+                            bg_padding = 2
+                            bg_rect_x = text_x - bg_padding
+                            bg_rect_y = text_y - ascent - bg_padding
+                            bg_rect_w = tw + 2 * bg_padding
+                            bg_rect_h = ascent + descent + 2 * bg_padding
+                            painter.fillRect(bg_rect_x, bg_rect_y, bg_rect_w, bg_rect_h, QColor(0, 0, 0, 180))
+                            
+                            painter.setPen(QPen(text_col))
+                            painter.drawText(text_x, text_y, text)
                     except Exception:
                         continue
             except Exception:
@@ -325,7 +565,7 @@ class CircleRoiTool(QObject):
         if getattr(self, '_show_stim_rois', True):
             try:
                 font = QFont()
-                font.setPointSize(12)
+                font.setPointSize(6)
                 font.setBold(True)
                 painter.setFont(font)
                 for stim_roi in list(self._stim_rois or []):
@@ -345,28 +585,48 @@ class CircleRoiTool(QObject):
                         painter.setPen(stim_pen)
                         painter.drawEllipse(int(round(lx0)), int(round(ly0)), int(round(lw)), int(round(lh)))
 
-                        # Draw stimulus label (e.g., "S1", "S2") centered using font metrics
-                        tx = float(lx0 + lw / 2.0)
-                        ty = float(ly0 + lh / 2.0)
-                        text_col = QColor(255, 255, 255)  # White text
-                        painter.setPen(QPen(text_col))
-                        stim_name = stim_roi.get('name', f"S{stim_roi.get('id', '?')}")
-                        fm = painter.fontMetrics()
-                        tw = fm.horizontalAdvance(stim_name)
-                        ascent = fm.ascent()
-                        descent = fm.descent()
-                        text_x = int(round(tx - tw / 2.0))
-                        text_y = int(round(ty + (ascent - descent) / 2.0))
-                        painter.drawText(text_x, text_y, stim_name)
+                        # Draw stimulus label (e.g., "S1", "S2") centered using font metrics only if labels are enabled
+                        if getattr(self, '_show_labels', True):
+                            tx = float(lx0 + lw / 2.0)
+                            ty = float(ly0 + lh / 2.0)
+                            text_col = QColor(255, 255, 255)  # White text
+                            stim_name = stim_roi.get('name', f"S{stim_roi.get('id', '?')}")
+                            fm = painter.fontMetrics()
+                            tw = fm.horizontalAdvance(stim_name)
+                            ascent = fm.ascent()
+                            descent = fm.descent()
+                            text_x = int(round(tx - tw / 2.0))
+                            text_y = int(round(ty + (ascent - descent) / 2.0))
+                            
+                            # Draw black background rectangle for better contrast
+                            bg_padding = 2
+                            bg_rect_x = text_x - bg_padding
+                            bg_rect_y = text_y - ascent - bg_padding
+                            bg_rect_w = tw + 2 * bg_padding
+                            bg_rect_h = ascent + descent + 2 * bg_padding
+                            painter.fillRect(bg_rect_x, bg_rect_y, bg_rect_w, bg_rect_h, QColor(0, 0, 0, 180))
+                            
+                            painter.setPen(QPen(text_col))
+                            painter.drawText(text_x, text_y, stim_name)
                     except Exception:
                         continue
             except Exception:
                 pass
 
+        # Draw mode indicator in the top-left corner
+        if self._bbox is not None:
+            mode_text = f"Mode: {self._interaction_mode.title()} (Y to toggle)"
+            painter.setPen(QPen(QColor(255, 255, 255, 200)))
+            font = QFont()
+            font.setPointSize(6)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(10, 25, mode_text)
+
         painter.end()
         self._label.setPixmap(overlay)
 
-    def show_bbox_image_coords(self, xyxy):
+    def show_bbox_image_coords(self, xyxy, rotation_angle=0.0):
         """Draw the stored bbox given in IMAGE coordinates (x0,y0,x1,y1).
         Maps image coords to label/pixmap coords using the current draw_rect
         and image size, sets the internal bbox, and repaints the overlay.
@@ -401,6 +661,7 @@ class CircleRoiTool(QObject):
         h = max(1.0, ly1 - ly0)
 
         self._bbox = (lx0, ly0, w, h)
+        self._rotation_angle = rotation_angle
         self._paint_overlay()
         return True
 
@@ -522,8 +783,28 @@ class CircleRoiTool(QObject):
         ys = np.arange(Y0, Y1, dtype=float)
         xs = np.arange(X0, X1, dtype=float)
         yy, xx = np.meshgrid(ys, xs, indexing='xy')
-        nx = (xx - cx) / rx
-        ny = (yy - cy) / ry
+        
+        # If there's rotation, we need to rotate the coordinate system
+        if self._rotation_angle != 0.0:
+            # Translate to center
+            xx_centered = xx - cx
+            yy_centered = yy - cy
+            
+            # Apply inverse rotation (rotate coordinates back to align with ellipse axes)
+            cos_angle = math.cos(-self._rotation_angle)
+            sin_angle = math.sin(-self._rotation_angle)
+            
+            xx_rotated = xx_centered * cos_angle - yy_centered * sin_angle
+            yy_rotated = xx_centered * sin_angle + yy_centered * cos_angle
+            
+            # Normalize with respect to ellipse axes
+            nx = xx_rotated / rx
+            ny = yy_rotated / ry
+        else:
+            # No rotation, use original method
+            nx = (xx - cx) / rx
+            ny = (yy - cy) / ry
+            
         mask = (nx * nx + ny * ny) <= 1.0
         mask = mask.T
         return (X0, Y0, X1, Y1, mask)
