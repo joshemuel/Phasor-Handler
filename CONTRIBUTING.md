@@ -1,9 +1,3 @@
-Of course\! That's a great start for a `CONTRIBUTING.md` file. I've fixed the formatting, clarified the steps, and added a crucial missing step for development.
-
-Here is the revised version, which is more robust and easier for a new contributor to follow.
-
------
-
 # Contributing to Phasor-Handler
 
 Thanks for your interest in improving Phasor-Handler\! This document explains how to set up a dev environment, coding standards, and how to submit issues/PRs.
