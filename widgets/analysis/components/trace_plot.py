@@ -151,17 +151,29 @@ class TraceplotWidget(QWidget):
 
     def _update_trace_from_roi(self, index=None):
         """Update the trace plot based on current ROI selection."""
-        if (self.main_window is None or 
-            self.main_window._current_tif is None or 
-            getattr(self.main_window, '_last_roi_xyxy', None) is None):
+        print(f"DEBUG: TraceplotWidget._update_trace_from_roi called with index={index}")
+        
+        # Check conditions
+        has_main_window = self.main_window is not None
+        has_current_tif = self.main_window._current_tif is not None if has_main_window else False
+        has_roi_xyxy = getattr(self.main_window, '_last_roi_xyxy', None) is not None if has_main_window else False
+        
+        print(f"DEBUG: has_main_window={has_main_window}, has_current_tif={has_current_tif}, has_roi_xyxy={has_roi_xyxy}")
+        
+        if not has_main_window or not has_current_tif or not has_roi_xyxy:
+            print("DEBUG: Early return - missing required data")
             # clear your plot if you want
             return
+        
+        print(f"DEBUG: ROI xyxy: {self.main_window._last_roi_xyxy}")
+        print(f"DEBUG: Image shape: {self.main_window._current_tif.shape}")
         
         # Get the ellipse mask from the ROI tool (handles rotation correctly)
         mask_result = None
         try:
             if hasattr(self.main_window, 'roi_tool'):
                 mask_result = self.main_window.roi_tool.get_ellipse_mask()
+                print(f"DEBUG: Got ellipse mask result: {mask_result is not None}")
         except Exception as e:
             print(f"Warning: Could not get ellipse mask: {e}")
         

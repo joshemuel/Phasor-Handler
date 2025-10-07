@@ -17,10 +17,9 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import numpy as np
-from tools import CircleRoiTool
-from widgets.analysis_components import ImageViewWidget
-from widgets.analysis_components.trace_plot import TraceplotWidget
 import sys
+
+from .components import ImageViewWidget, TraceplotWidget, BnCDialog, CircleRoiTool
 
 
 class AnalysisWidget(QWidget):
@@ -170,6 +169,7 @@ class AnalysisWidget(QWidget):
         self.roi_tool.roiChanged.connect(self._on_roi_changed)
         self.roi_tool.roiFinalized.connect(self._on_roi_finalized)
         self.roi_tool.roiSelected.connect(self._on_roi_selected_by_click)
+        print("DEBUG: ROI tool signals connected")
 
         self.tif_slider = QSlider(Qt.Orientation.Horizontal)
         self.tif_slider.setMinimum(0)
@@ -1149,22 +1149,34 @@ class AnalysisWidget(QWidget):
 
     def _on_roi_finalized(self, xyxy):
         """xyxy is (x0, y0, x1, y1) in IMAGE coordinates."""
+        print(f"DEBUG: ROI finalized with xyxy={xyxy}")
         self.window._last_roi_xyxy = xyxy
         # Only clear editing state when drawing a completely new ROI (not when modifying existing one)
         # The editing state should be preserved if we're modifying a saved ROI
         # Store rotation angle persistently
         current_rotation = getattr(self.roi_tool, '_rotation_angle', 0.0)
         self.window._last_roi_rotation = current_rotation
+        print(f"DEBUG: Current rotation={current_rotation}")
+        
+        # Check if we have image data
+        has_image = hasattr(self.window, '_current_tif') and self.window._current_tif is not None
+        print(f"DEBUG: Has image data: {has_image}")
+        if has_image:
+            print(f"DEBUG: Image shape: {self.window._current_tif.shape}")
+        
         # Ensure overlay is painted on the current pixmap immediately
         try:
             # Preserve the current rotation angle when finalizing ROI
             self.roi_tool.show_bbox_image_coords(xyxy, current_rotation)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"DEBUG: Error showing bbox: {e}")
         # Full redraw: recompute trace and recreate the vline after plotting
         try:
+            print("DEBUG: Calling _update_trace_from_roi")
             self._update_trace_from_roi()
-        except Exception:
+            print("DEBUG: _update_trace_from_roi completed")
+        except Exception as e:
+            print(f"DEBUG: Error in _update_trace_from_roi: {e}")
             # As a last resort ensure vline exists
             self._update_trace_vline()
 
@@ -1226,6 +1238,12 @@ class AnalysisWidget(QWidget):
         self.roi_tool.set_saved_rois(self.window._saved_rois)
         # Repaint overlay to show all saved ROIs
         self.roi_tool._paint_overlay()
+        
+        # Update trace plot for the current ROI
+        try:
+            self._update_trace_from_roi()
+        except Exception as e:
+            print(f"Error updating trace after ROI save: {e}")
 
     def _on_remove_roi_clicked(self):
         """Remove selected saved ROI from widget and in-memory store."""
@@ -1816,7 +1834,7 @@ class AnalysisWidget(QWidget):
             
             # Import and create the BnC dialog
             print("DEBUG: Importing BnC dialog...")
-            from tools.bnc import BnCDialog, apply_bnc_to_image, create_qimage_from_array, create_composite_image
+            from components.bnc import BnCDialog, apply_bnc_to_image, create_qimage_from_array, create_composite_image
             print("DEBUG: Import successful")
             
             # Initialize global BnC settings if they don't exist
@@ -1886,7 +1904,7 @@ class AnalysisWidget(QWidget):
 
     def _apply_bnc_live_preview(self):
         """Apply BnC settings to create live preview of the image."""
-        from tools.bnc import apply_bnc_to_image, create_qimage_from_array, create_composite_image
+        from components.bnc import apply_bnc_to_image, create_qimage_from_array, create_composite_image
         from PyQt6.QtGui import QPixmap
         
         try:
@@ -2189,3 +2207,93 @@ class AnalysisWidget(QWidget):
         
         # Store the new dimensions
         self.window._last_img_wh = new_img_wh
+
+    def _update_trace_vline(self):
+        """Lightweight: update only the vertical frame line on the existing trace.
+        This assumes the metric plot already exists; if not, it does nothing.
+        """
+        # If the axes are empty, don't try to add a vline (use full update instead)
+        try:
+            current_frame = int(self.tif_slider.value()) if hasattr(self, 'tif_slider') else 0
+        except Exception:
+            return
+
+        # Determine current position based on time display mode
+        show_time = getattr(self, '_show_time_in_seconds', False)
+        current_x_pos = current_frame
+        
+        if show_time:
+            try:
+                ed = getattr(self.window, '_exp_data', None)
+                time_stamps = None
+                
+                if ed is not None:
+                    # Try different possible attribute names for time stamps
+                    for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
+                        if hasattr(ed, attr_name):
+                            time_stamps = getattr(ed, attr_name)
+                            break
+                
+                if time_stamps is not None and current_frame < len(time_stamps):
+                    current_x_pos = time_stamps[current_frame] / 1000.0
+                elif ed is not None:
+                    # Fallback: estimate time based on frame rate
+                    frame_rate = getattr(ed, 'frame_rate', None)
+                    if frame_rate and frame_rate > 0:
+                        current_x_pos = current_frame / frame_rate
+            except Exception:
+                pass
+
+        # If there's no existing metric plotted, set sensible x-limits so a
+        # standalone vline will be visible (use number of frames when available).
+        if not self.trace_ax.lines:
+            try:
+                nframes = self.window._current_tif.shape[0] if getattr(self.window, '_current_tif', None) is not None and getattr(self.window, '_current_tif', None).ndim >= 3 else 1
+                
+                # Set x-limits based on display mode
+                if show_time:
+                    # Try to get max time value
+                    try:
+                        ed = getattr(self.window, '_exp_data', None)
+                        time_stamps = None
+                        
+                        if ed is not None:
+                            for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
+                                if hasattr(ed, attr_name):
+                                    time_stamps = getattr(ed, attr_name)
+                                    break
+                        
+                        if time_stamps is not None and len(time_stamps) > 0:
+                            xmax = max(np.array(time_stamps[:min(nframes, len(time_stamps))]) / 1000.0)
+                        elif ed is not None:
+                            frame_rate = getattr(ed, 'frame_rate', None)
+                            if frame_rate and frame_rate > 0:
+                                xmax = (nframes - 1) / frame_rate
+                            else:
+                                xmax = max(1, nframes - 1)
+                        else:
+                            xmax = max(1, nframes - 1)
+                    except Exception:
+                        xmax = max(1, nframes - 1)
+                else:
+                    xmax = max(1, nframes - 1)
+                    
+                self.trace_ax.set_xlim(0, xmax)
+            except Exception:
+                pass
+
+        # Ensure we have a persistent vline and move it (create if missing)
+        if not hasattr(self.window, '_frame_vline') or self.window._frame_vline is None:
+            self.window._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=10, linewidth=2)
+        else:
+            try:
+                self.window._frame_vline.set_xdata([current_x_pos, current_x_pos])
+            except Exception:
+                # recreate fallback
+                self.window._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=10, linewidth=2)
+
+        # Redraw canvas (fast)
+        try:
+            self.trace_canvas.draw_idle()
+        except Exception:
+            pass

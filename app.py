@@ -10,8 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
 import numpy as np
 
-from widgets import ConversionWidget, RegistrationWidget
-from widgets.analysis import AnalysisWidget
+from widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
 from tools import misc
 from workers import RegistrationWorker
 from models.dir_manager import DirManager
