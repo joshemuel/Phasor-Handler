@@ -19,7 +19,7 @@ It provides a PyQt6 GUI for viewing registered or raw stacks (Ch1/Ch2), z-projec
 - **Stimulus overlay**: show stimulated ROI locations from experiment metadata and add to the saved ROIs
 - **Trace plotting**: configurable formula, custom y-limits, frame/time (s) x-axis
 - **Export**: write per-ROI traces for all frames to `.txt` (tab-separated)
-- Keyboard: `R` save/add ROI, `Delete` remove selected ROI, `Esc` clear selection, `Alt+S` load stimulated ROIs
+- Keyboard: `R` save/add ROI, `Delete` remove selected ROI, `Esc` clear selection, `Alt+S` load stimulated ROIs, `Right Click + drag` translate selected ROI, `Y` toggle right click to rotation mode
 
 ---
 
