@@ -18,6 +18,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import numpy as np
 from tools import CircleRoiTool
+from widgets.analysis_components import ImageViewWidget
+from widgets.analysis_components.trace_plot import TraceplotWidget
 import sys
 
 
@@ -153,11 +155,15 @@ class AnalysisWidget(QWidget):
 
         # --- Display panel: reg_tif image display and slider ---
         display_panel = QVBoxLayout()
-        self.reg_tif_label = QLabel("Select a directory to view registered images.")
-        self.reg_tif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.reg_tif_label.setMinimumSize(700, 629)
-        self.reg_tif_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        display_panel.addWidget(self.reg_tif_label, 1)  # Give stretch factor of 1 to make it greedy
+        
+        # Create the image view widget that encapsulates reg_tif_label
+        self.image_view = ImageViewWidget()
+        self.reg_tif_label = self.image_view.get_label()  # Maintain backward compatibility
+        
+        # Connect image update signal
+        self.image_view.imageUpdated.connect(self._on_image_updated)
+        
+        display_panel.addWidget(self.image_view, 1)  # Give stretch factor of 1 to make it greedy
 
         # --- ROI Tool Integration ---
         self.roi_tool = CircleRoiTool(self.reg_tif_label)
@@ -187,91 +193,24 @@ class AnalysisWidget(QWidget):
         bottom_panel = QHBoxLayout()
         bottom_panel.addStretch(0)
 
-        # Toggles for plot
-        plot_toggle_layout = QVBoxLayout()
+        # Create the trace plot widget
+        self.trace_plot_widget = TraceplotWidget()
+        self.trace_plot_widget.set_main_window(self.window)
+        bottom_panel.addWidget(self.trace_plot_widget, 1)
 
-        # Y limits inputs
-        ylim_layout = QVBoxLayout()
-        ylim_layout.setSpacing(2)
-        ylim_layout.setContentsMargins(0, 0, 0, 0)
-
-        ylim_label = QLabel("Y limits:")
-        ylim_label.setSizePolicy(QSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
-        ylim_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-
-        self.ylim_min_edit = QLineEdit()
-        self.ylim_min_edit.setFixedWidth(50)
-        self.ylim_min_edit.setFixedHeight(20)
-        self.ylim_min_edit.setPlaceholderText("Min")
-        self.ylim_min_edit.editingFinished.connect(self._update_trace_from_roi)
-
-        self.ylim_max_edit = QLineEdit()
-        self.ylim_max_edit.setFixedWidth(50)
-        self.ylim_max_edit.setFixedHeight(20)
-        self.ylim_max_edit.setPlaceholderText("Max")
-        self.ylim_max_edit.editingFinished.connect(self._update_trace_from_roi)
-
-        self.reset_ylim_button = QPushButton("Reset")
-        self.reset_ylim_button.setFixedWidth(50)
-        self.reset_ylim_button.clicked.connect(self._reset_ylim)
-
-        ylim_layout.addWidget(ylim_label)
-        ylim_layout.addWidget(self.ylim_max_edit)
-        ylim_layout.addWidget(self.ylim_min_edit)
-        ylim_layout.addWidget(self.reset_ylim_button)
-        plot_toggle_layout.addLayout(ylim_layout)
-
-        self.formula_dropdown = QComboBox()
-        self.formula_dropdown.setFixedWidth(100)
-        self.formula_dropdown.setStyleSheet("QComboBox { font-size: 8pt; }")
-        self.formula_dropdown.addItem("Fg - Fog / Fr")
-        self.formula_dropdown.addItem("Fg - Fog / Fog")
-        self.formula_dropdown.addItem("Fg only")
-        self.formula_dropdown.addItem("Fr only")
-        self.formula_dropdown.setContentsMargins(0, 0, 0, 0)
-        self.formula_dropdown.currentIndexChanged.connect(self._update_trace_from_roi)
-        plot_toggle_layout.addWidget(self.formula_dropdown)
-
-        # Time display toggle button
-        self.time_display_button = QPushButton("Frames")
-        self.time_display_button.setFixedWidth(100)
-        self.time_display_button.setFixedHeight(20)
-        self.time_display_button.setCheckable(True)
-        self.time_display_button.setChecked(False)  # Default to frames
-        self.time_display_button.setStyleSheet("QPushButton { font-size: 8pt; }")
-        self.time_display_button.setToolTip("Toggle between frame numbers and time in seconds")
-        self.time_display_button.clicked.connect(self._toggle_time_display)
-        self._show_time_in_seconds = False  # Track current display mode
-        plot_toggle_layout.addWidget(self.time_display_button)
-
-        bottom_panel.addLayout(plot_toggle_layout)
-
-        # Figure of ROI signal
-        self.trace_fig, self.trace_ax = plt.subplots(figsize=(8, 4), dpi=100)
-        self.trace_ax.set_xticks([])
-        self.trace_ax.set_yticks([])
-        self.trace_ax.set_xlabel("")
-        self.trace_ax.set_ylabel("")
-        for spine in self.trace_ax.spines.values():
-            spine.set_visible(True)
-        self.trace_fig.patch.set_alpha(0.0)
-        self.trace_ax.set_facecolor('none')
-        self.trace_canvas = FigureCanvas(self.trace_fig)
-        self.trace_canvas.setStyleSheet("background:transparent; border: 1px solid #888;")
-        self.trace_canvas.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.trace_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.trace_ax.xaxis.label.set_color('white')
-        self.trace_ax.yaxis.label.set_color('white')
-        self.trace_ax.tick_params(axis='x', colors='white')
-        self.trace_ax.tick_params(axis='y', colors='white')
-        for spine in self.trace_ax.spines.values():
-            spine.set_color('white')
-        self.trace_fig.tight_layout()
-        bottom_panel.addWidget(self.trace_canvas, 1)
-
-        # store user overrides
-        self.window._ylim_min_user = None
-        self.window._ylim_max_user = None
+        # Get widgets for backward compatibility
+        trace_widgets = self.trace_plot_widget.get_widgets_for_compatibility()
+        self.ylim_min_edit = trace_widgets['ylim_min_edit']
+        self.ylim_max_edit = trace_widgets['ylim_max_edit']
+        self.reset_ylim_button = trace_widgets['reset_ylim_button']
+        self.formula_dropdown = trace_widgets['formula_dropdown']
+        self.time_display_button = trace_widgets['time_display_button']
+        self.trace_fig = trace_widgets['trace_fig']
+        self.trace_ax = trace_widgets['trace_ax']
+        self.trace_canvas = trace_widgets['trace_canvas']
+        
+        # Maintain internal compatibility for display mode tracking
+        self._show_time_in_seconds = False
 
         # --- Assemble layouts ---
         main_hbox.addLayout(left_vbox, 1)  # Allow directory list to expand
@@ -371,6 +310,7 @@ class AnalysisWidget(QWidget):
             self.window.zproj_max_button = self.zproj_max_button
             self.window.zproj_mean_button = self.zproj_mean_button
             self.window.reg_tif_label = self.reg_tif_label
+            self.window.image_view = self.image_view  # Expose the new image view widget
             self.window.roi_tool = self.roi_tool
             self.window.tif_slider = self.tif_slider
             self.window.ylim_min_edit = self.ylim_min_edit
@@ -381,6 +321,7 @@ class AnalysisWidget(QWidget):
             self.window.trace_fig = self.trace_fig
             self.window.trace_ax = self.trace_ax
             self.window.trace_canvas = self.trace_canvas
+            self.window.trace_plot_widget = self.trace_plot_widget  # Expose the new trace plot widget
             self.window.roi_list_widget = self.roi_list_widget
             # Expose moved analysis methods for backward compatibility
             self.window.display_reg_tif_image = self.display_reg_tif_image
@@ -393,6 +334,12 @@ class AnalysisWidget(QWidget):
             self.window.analysis_list_widget.currentItemChanged.connect(self._on_item_changed_with_roi_preservation)
         except Exception:
             pass
+
+    def _on_image_updated(self):
+        """Handle when the image view widget updates its display."""
+        # This can be used for any post-image-update processing
+        # Currently just for future extensibility
+        pass
 
     def _on_item_changed_with_roi_preservation(self, current, previous=None):
         """Handle item changes while preserving ROI information across selections."""
@@ -499,8 +446,7 @@ class AnalysisWidget(QWidget):
         from PyQt6.QtWidgets import QApplication
         
         if not current:
-            self.reg_tif_label.setPixmap(QPixmap())
-            self.reg_tif_label.setText("Select a directory to view registered images.")
+            self.image_view.clear_pixmap()
             self.tif_slider.setEnabled(False)
             self.tif_slider.setMaximum(0)
             self.window._current_tif = None
@@ -536,7 +482,7 @@ class AnalysisWidget(QWidget):
         
         if use_registered and has_registered_tif:
             # Load registered TIFF files
-            self.reg_tif_label.setText("Loading registered TIFF files...")
+            self.image_view.set_loading_message("Loading registered TIFF files...")
             try:
                 # First, check the TIFF file properties before loading
                 import os
@@ -730,16 +676,14 @@ class AnalysisWidget(QWidget):
                 # Store last image width and height for ROI tools and resize widget if needed
                 self._check_and_resize_for_image_change(tif, previous_img_wh)
             except Exception as e:
-                self.reg_tif_label.setText(f"Failed to load registered TIFF: {e}")
-                self.reg_tif_label.setPixmap(QPixmap())
+                self.image_view.set_error_message(f"Failed to load registered TIFF: {e}")
                 self.tif_slider.setEnabled(False)
                 self.tif_slider.setMaximum(0)
                 self.window._current_tif = None
                 return
         elif not use_registered and has_raw_numpy:
             # Load raw numpy files
-            self.reg_tif_label.setPixmap(QPixmap())
-            self.reg_tif_label.setText("Loading raw numpy files...")
+            self.image_view.set_loading_message("Loading raw numpy files...")
             
             try:
                 if os.path.isfile(npy_ch0_path):
@@ -839,8 +783,7 @@ class AnalysisWidget(QWidget):
                 return
         else:
             # Neither file type is available - show clear message to user
-            self.reg_tif_label.setPixmap(QPixmap())  # Clear any existing image
-            self.reg_tif_label.setText("No image files found in this directory.\n\nThis directory doesn't contain:\n• Ch1-reg.tif (registered files)\n• ImageData_Ch0_TP0000000.npy (raw files)")
+            self.image_view.set_error_message("No image files found in this directory.\n\nThis directory doesn't contain:\n• Ch1-reg.tif (registered files)\n• ImageData_Ch0_TP0000000.npy (raw files)")
             self.tif_slider.setEnabled(False)
             self.tif_slider.setMaximum(0)
             self.window._current_tif = None
@@ -853,7 +796,7 @@ class AnalysisWidget(QWidget):
         
         # First try to read existing pickle file
         if os.path.isfile(exp_details):
-            self.reg_tif_label.setText("Loading experiment metadata...")
+            self.image_view.set_loading_message("Loading experiment metadata...")
             try:
                 with open(exp_details, 'rb') as f:
                     exp_data = pickle.load(f)
@@ -868,7 +811,7 @@ class AnalysisWidget(QWidget):
         
         # If no metadata exists or failed to load, try to read metadata from raw files
         if self.window._exp_data is None:
-            self.reg_tif_label.setText("Reading metadata from raw files...")
+            self.image_view.set_loading_message("Reading metadata from raw files...")
             # QApplication.processEvents()
             try:
                 meta_cmd = [sys.executable, "scripts/meta_reader.py", "-f", str(reg_dir)]
@@ -916,7 +859,7 @@ class AnalysisWidget(QWidget):
                 self.reg_tif_label.setText(f"Exception during metadata reading: {e}")
 
         # Finalize loading and display image
-        self.reg_tif_label.setText("Preparing image display...")
+        self.image_view.set_loading_message("Preparing image display...")
         
         nframes = tif.shape[0] if tif.ndim == 3 else 1
         
@@ -937,7 +880,7 @@ class AnalysisWidget(QWidget):
         print(f"DEBUG: Slider configured - max: {nframes-1}, enabled: {nframes > 1}")
         
         # Show final status before displaying image
-        self.reg_tif_label.setText("Loading image frames...")
+        self.image_view.set_loading_message("Loading image frames...")
         
         self.update_tif_frame()
 
@@ -1085,7 +1028,7 @@ class AnalysisWidget(QWidget):
 
         # Safety check
         if img is None or img.size == 0:
-            self.reg_tif_label.setText(f"Error: Frame {frame_idx} is empty or corrupted.")
+            self.image_view.set_error_message(f"Error: Frame {frame_idx} is empty or corrupted.")
             return
 
         # Normalize base channel (green) using robust percentile clipping
@@ -1150,75 +1093,28 @@ class AnalysisWidget(QWidget):
                 colored_arr = cmap(g_view)
                 arr_uint8 = (colored_arr * 255).astype(np.uint8)
 
-        h, w, _ = arr_uint8.shape
-        qimg = QImage(arr_uint8.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
-        pixmap = QPixmap.fromImage(qimg)
-        
-        # store a copy of the displayed image for CNB (as grayscale or RGB uint8)
-        try:
-            if arr_uint8.shape[2] == 4:
-                rgb = arr_uint8[..., :3]
-            else:
-                rgb = arr_uint8
-            self.window._current_image_np = rgb.copy()
-            self.window._current_qimage = qimg.copy()
-        except Exception:
-            self.window._current_image_np = None
-            self.window._current_qimage = None
-            
-        # Apply global BnC settings if they exist and are enabled
+        # Display the image using the image view widget (preserves aspect ratio and sizing)
+        bnc_settings = None
         if (hasattr(self.window, '_global_bnc_settings') and 
             self.window._global_bnc_settings.get('enabled', False)):
-            try:
-                # Apply BnC directly to the raw image data before display
-                from tools.bnc import apply_bnc_to_image, create_qimage_from_array, create_composite_image
-                
-                # Get BnC settings
-                settings = self.window._global_bnc_settings
-                
-                # Apply BnC to current frame
-                if img_chan2 is not None and self.composite_button.isChecked():
-                    # Composite mode - apply BnC to both channels
-                    bnc_img = create_composite_image(img, img_chan2, settings['ch1'], settings['ch2'])
-                else:
-                    # Single channel mode
-                    active_ch = getattr(self, "_active_channel", 1)
-                    if img_chan2 is not None and active_ch == 2:
-                        # Channel 2
-                        bnc_img = apply_bnc_to_image(img_chan2, settings['ch2']['min'], settings['ch2']['max'], settings['ch2']['contrast'])
-                        # Convert to RGBA grayscale
-                        if bnc_img.ndim == 2:
-                            h_bnc, w_bnc = bnc_img.shape
-                            rgba_bnc = np.zeros((h_bnc, w_bnc, 4), dtype=np.uint8)
-                            rgba_bnc[..., :3] = bnc_img[..., None]
-                            rgba_bnc[..., 3] = 255
-                            bnc_img = rgba_bnc
-                    else:
-                        # Channel 1
-                        bnc_img = apply_bnc_to_image(img, settings['ch1']['min'], settings['ch1']['max'], settings['ch1']['contrast'])
-                        # Convert to RGBA grayscale  
-                        if bnc_img.ndim == 2:
-                            h_bnc, w_bnc = bnc_img.shape
-                            rgba_bnc = np.zeros((h_bnc, w_bnc, 4), dtype=np.uint8)
-                            rgba_bnc[..., :3] = bnc_img[..., None]
-                            rgba_bnc[..., 3] = 255
-                            bnc_img = rgba_bnc
-                
-                # Create new QImage and pixmap with BnC applied
-                if bnc_img is not None:
-                    qimg = create_qimage_from_array(bnc_img)
-                    pixmap = QPixmap.fromImage(qimg)
-                    
-            except Exception as e:
-                print(f"DEBUG: Error applying global BnC in update_tif_frame: {e}")
-                # Fall back to original pixmap if BnC fails
-                pass
+            bnc_settings = self.window._global_bnc_settings
         
-        # Scale and display the final pixmap
-        base_pix = pixmap.scaled(self.reg_tif_label.size(), Qt.AspectRatioMode.KeepAspectRatio)
-        self.reg_tif_label.setFixedSize(base_pix.size())
-        self.reg_tif_label.setPixmap(base_pix)
-        self.reg_tif_label.setText("")
+        # Determine if composite mode is active and which channel is active
+        composite_mode = self.composite_button.isChecked() if hasattr(self, 'composite_button') else False
+        active_channel = getattr(self, "_active_channel", 1)
+        
+        base_pix = self.image_view.display_image_with_bnc(
+            arr_uint8, 
+            bnc_settings, 
+            img=img, 
+            img_chan2=img_chan2, 
+            composite_mode=composite_mode, 
+            active_channel=active_channel
+        )
+        
+        # Store current image data for backward compatibility
+        self.window._current_image_np = self.image_view.get_current_image_data()['numpy_array']
+        self.window._current_qimage = self.image_view.get_current_image_data()['qimage']
 
         # --- Update ROI Tool with new image view ---
         if hasattr(self.window, '_last_img_wh'):
@@ -2053,7 +1949,7 @@ class AnalysisWidget(QWidget):
                 qimg = create_qimage_from_array(preview_img)
                 pixmap = QPixmap.fromImage(qimg)
                 scaled_pixmap = pixmap.scaled(
-                    self.reg_tif_label.size(),
+                    self.image_view.get_label_size(),
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
                 )
@@ -2104,357 +2000,32 @@ class AnalysisWidget(QWidget):
             from PyQt6.QtGui import QImage
             qimg = QImage(adjusted.data, adjusted.shape[1], adjusted.shape[0], adjusted.shape[1] * 4, QImage.Format.Format_RGBA8888)
             pix = QPixmap.fromImage(qimg)
-            self.reg_tif_label.setPixmap(pix.scaled(self.reg_tif_label.size(), Qt.AspectRatioMode.KeepAspectRatio))
+            self.reg_tif_label.setPixmap(pix.scaled(self.image_view.get_label_size(), Qt.AspectRatioMode.KeepAspectRatio))
         except Exception as e:
             print(f"DEBUG: Error in legacy CNB adjustment: {e}")
 
     def _update_trace_from_roi(self, index=None):
-        if self.window._current_tif is None or getattr(self.window, '_last_roi_xyxy', None) is None:
-            # clear your plot if you want
-            return
+        """Update the trace plot based on current ROI selection - delegated to trace plot widget."""
+        self.trace_plot_widget._update_trace_from_roi(index)
         
-        # Get the ellipse mask from the ROI tool (handles rotation correctly)
-        mask_result = None
-        try:
-            mask_result = self.roi_tool.get_ellipse_mask()
-        except Exception as e:
-            print(f"Warning: Could not get ellipse mask: {e}")
-        
-        if mask_result is None:
-            # Fallback to rectangular region
-            x0, y0, x1, y1 = self.window._last_roi_xyxy
-            def stack3d(a):
-                a = np.asarray(a).squeeze()
-                return a[None, ...] if a.ndim == 2 else a
-
-            ch1 = stack3d(self.window._current_tif)
-            sig1 = ch1[:, y0:y1, x0:x1].mean(axis=(1,2)) if (x1>x0 and y1>y0) else np.zeros((ch1.shape[0],), dtype=np.float32)
-
-            ch2 = getattr(self.window, "_current_tif_chan2", None)
-            sig2 = None
-            if ch2 is not None:
-                ch2 = stack3d(ch2)
-                sig2 = ch2[:, y0:y1, x0:x1].mean(axis=(1,2))
-        else:
-            # Use ellipse mask for proper signal extraction
-            X0, Y0, X1, Y1, mask = mask_result
-            
-            def stack3d(a):
-                a = np.asarray(a).squeeze()
-                return a[None, ...] if a.ndim == 2 else a
-
-            ch1 = stack3d(self.window._current_tif)
-            
-            # Extract signal using the ellipse mask
-            if mask.size > 0 and np.any(mask):
-                # Apply mask to each frame
-                sig1_frames = []
-                for frame_idx in range(ch1.shape[0]):
-                    frame = ch1[frame_idx, Y0:Y1, X0:X1]
-                    if frame.shape == mask.shape:
-                        masked_values = frame[mask]
-                        sig1_frames.append(np.mean(masked_values) if len(masked_values) > 0 else 0.0)
-                    else:
-                        print(f"Warning: Frame shape {frame.shape} doesn't match mask shape {mask.shape}")
-                        sig1_frames.append(0.0)
-                sig1 = np.array(sig1_frames, dtype=np.float32)
-            else:
-                sig1 = np.zeros((ch1.shape[0],), dtype=np.float32)
-
-            ch2 = getattr(self.window, "_current_tif_chan2", None)
-            sig2 = None
-            if ch2 is not None:
-                ch2 = stack3d(ch2)
-                if mask.size > 0 and np.any(mask):
-                    # Apply mask to each frame of channel 2
-                    sig2_frames = []
-                    for frame_idx in range(ch2.shape[0]):
-                        frame = ch2[frame_idx, Y0:Y1, X0:X1]
-                        if frame.shape == mask.shape:
-                            masked_values = frame[mask]
-                            sig2_frames.append(np.mean(masked_values) if len(masked_values) > 0 else 0.0)
-                        else:
-                            sig2_frames.append(0.0)
-                    sig2 = np.array(sig2_frames, dtype=np.float32)
-                else:
-                    sig2 = np.zeros((ch2.shape[0],), dtype=np.float32)
-
-        # Compute Fo (baseline) as mean over first 10% of frames of sig1
-        nframes = sig1.shape[0]
-        if nframes <= 0:
-            return
-        baseline_count = max(1, int(np.ceil(nframes * 0.10)))
-        Fog = float(np.mean(sig1[:baseline_count]))
-
-        self.trace_ax.cla()
-
-        # Compute metric: (F_green - Fo_green) / F_red
-        # If red channel missing, avoid division by zero by plotting NaNs
-        if sig2 is None:
-            metric = np.full_like(sig1, np.nan)
-            self.formula_dropdown.setEnabled(False)
-        else:
-            self.formula_dropdown.setEnabled(True)
-            formula_index = self.formula_dropdown.currentIndex() if index is None else index
-            if formula_index == 0:
-                denom = sig2.copy().astype(np.float32)
-                denom[denom == 0] = 0 + 1e-6
-                metric = (sig1 - Fog) / denom
-            elif formula_index == 1:
-                metric = (sig1 - Fog) / Fog
-            elif formula_index == 2:
-                metric = sig1
-            elif formula_index == 3:
-                if sig2 is None:
-                    metric = np.full_like(sig1, 0)
-                else:
-                    metric = sig2
-
-
-        current_frame = int(self.tif_slider.value()) if hasattr(self, 'tif_slider') else 0
-
-        # Determine x-axis values and labels based on time display mode
-        show_time = getattr(self, '_show_time_in_seconds', False)
-        x_values = None
-        x_label = "Frame"
-        current_x_pos = current_frame
-        
-        if show_time:
-            # Try to get time stamps from experiment data
-            try:
-                ed = getattr(self.window, '_exp_data', None)
-                time_stamps = None
-                
-                if ed is not None:
-                    # Try different possible attribute names for time stamps
-                    for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                        if hasattr(ed, attr_name):
-                            time_stamps = getattr(ed, attr_name)
-                            print(f"DEBUG: Found time stamps in attribute '{attr_name}', length: {len(time_stamps) if hasattr(time_stamps, '__len__') else 'unknown'}")
-                            if hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
-                                print(f"DEBUG: First few time stamps: {time_stamps[:min(5, len(time_stamps))]}")
-                            break
-                
-                if time_stamps is not None and len(time_stamps) >= len(metric):
-                    # Use time stamps as x-axis (convert from ms to seconds)
-                    x_values = np.array(time_stamps[:len(metric)]) / 1000.0
-                    x_label = "Time (s)"
-                    # Convert current frame position to time
-                    if current_frame < len(time_stamps):
-                        current_x_pos = time_stamps[current_frame] / 1000.0
-                    else:
-                        current_x_pos = time_stamps[-1] / 1000.0 if len(time_stamps) > 0 else current_frame
-                    print(f"DEBUG: Using time stamps for x-axis (converted from ms), current position: {current_x_pos}s")
-                else:
-                    # Fallback: estimate time based on frame rate (if available)
-                    frame_rate = getattr(ed, 'frame_rate', None) if ed else None
-                    if frame_rate and frame_rate > 0:
-                        x_values = np.arange(len(metric)) / frame_rate
-                        x_label = "Time (s)"
-                        current_x_pos = current_frame / frame_rate
-                        print(f"DEBUG: Using estimated time from frame rate {frame_rate} Hz, current position: {current_x_pos}s")
-                    else:
-                        # No time data available, fall back to frames
-                        show_time = False
-                        print("DEBUG: No time stamp data or frame rate found, showing frames instead")
-            except Exception as e:
-                print(f"DEBUG: Error getting time stamps: {e}")
-                show_time = False
-
-        # Plot metric with appropriate x-axis
-        if x_values is not None:
-            self.trace_ax.plot(x_values, metric, label="(F green - Fo green)/F red", color='white')
-        else:
-            self.trace_ax.plot(metric, label="(F green - Fo green)/F red", color='white')
-        
-        self.trace_ax.set_xlabel(x_label, color='white')
-        self.window._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=20, linewidth=2)
-        
-        try:
-            stims = []
-            ed = getattr(self.window, '_exp_data', None)
-            if ed is None:
-                stims = []
-            else:
-                stims = getattr(ed, 'stimulation_timeframes', [])
-
-            # Convert stimulation timeframes to appropriate x-axis units
-            if show_time and x_values is not None:
-                # Convert stim frames to time positions (from ms to seconds)
-                for stim in stims:
-                    stim_frame = int(stim)
-                    if stim_frame < len(time_stamps):
-                        stim_x_pos = time_stamps[stim_frame] / 1000.0
-                        self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
-            else:
-                # Use frame numbers
-                [self.trace_ax.axvline(int(stim), color='red', linestyle='--', zorder=15, linewidth=2) for stim in stims]
-        except Exception:
-            # keep plotting even if stim drawing fails
-            pass
-
-        # Parse y-limits from the QLineEdits (if present) and apply them
-        try:
-            def _parse(txt):
-                try:
-                    s = str(txt).strip()
-                    return float(s) if s != '' else None
-                except Exception:
-                    return None
-
-            ymin = None
-            ymax = None
-            if hasattr(self, 'ylim_min_edit'):
-                ymin = _parse(self.ylim_min_edit.text())
-            if hasattr(self, 'ylim_max_edit'):
-                ymax = _parse(self.ylim_max_edit.text())
-
-            # If both provided and inverted, swap
-            if ymin is not None and ymax is not None and ymin > ymax:
-                ymin, ymax = ymax, ymin
-
-            if ymin is not None or ymax is not None:
-                # If one side missing, keep current autoscaled value for that side
-                cur = self.trace_ax.get_ylim()
-                if ymin is None:
-                    ymin = cur[0]
-                if ymax is None:
-                    ymax = cur[1]
-                self.trace_ax.set_ylim(ymin, ymax)
-        except Exception:
-            pass
-
-        self.trace_fig.tight_layout()
-        self.trace_canvas.draw_idle()
+        # Sync the internal time display flag
+        self._show_time_in_seconds = self.trace_plot_widget._show_time_in_seconds
 
     def _update_trace_vline(self):
-        """Lightweight: update only the vertical frame line on the existing trace.
-        This assumes the metric plot already exists; if not, it does nothing.
-        """
-        # If the axes are empty, don't try to add a vline (use full update instead)
-        try:
-            current_frame = int(self.tif_slider.value()) if hasattr(self, 'tif_slider') else 0
-        except Exception:
-            return
-
-        # Determine current position based on time display mode
-        show_time = getattr(self, '_show_time_in_seconds', False)
-        current_x_pos = current_frame
-        
-        if show_time:
-            try:
-                ed = getattr(self.window, '_exp_data', None)
-                time_stamps = None
-                
-                if ed is not None:
-                    # Try different possible attribute names for time stamps
-                    for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                        if hasattr(ed, attr_name):
-                            time_stamps = getattr(ed, attr_name)
-                            break
-                
-                if time_stamps is not None and current_frame < len(time_stamps):
-                    current_x_pos = time_stamps[current_frame] / 1000.0
-                elif ed is not None:
-                    # Fallback: estimate time based on frame rate
-                    frame_rate = getattr(ed, 'frame_rate', None)
-                    if frame_rate and frame_rate > 0:
-                        current_x_pos = current_frame / frame_rate
-            except Exception:
-                pass
-
-        # If there's no existing metric plotted, set sensible x-limits so a
-        # standalone vline will be visible (use number of frames when available).
-        if not self.trace_ax.lines:
-            try:
-                nframes = self.window._current_tif.shape[0] if getattr(self.window, '_current_tif', None) is not None and getattr(self.window, '_current_tif', None).ndim >= 3 else 1
-                
-                # Set x-limits based on display mode
-                if show_time:
-                    # Try to get max time value
-                    try:
-                        ed = getattr(self.window, '_exp_data', None)
-                        time_stamps = None
-                        
-                        if ed is not None:
-                            for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                                if hasattr(ed, attr_name):
-                                    time_stamps = getattr(ed, attr_name)
-                                    break
-                        
-                        if time_stamps is not None and len(time_stamps) > 0:
-                            xmax = max(np.array(time_stamps[:min(nframes, len(time_stamps))]) / 1000.0)
-                        elif ed is not None:
-                            frame_rate = getattr(ed, 'frame_rate', None)
-                            if frame_rate and frame_rate > 0:
-                                xmax = (nframes - 1) / frame_rate
-                            else:
-                                xmax = max(1, nframes - 1)
-                        else:
-                            xmax = max(1, nframes - 1)
-                    except Exception:
-                        xmax = max(1, nframes - 1)
-                else:
-                    xmax = max(1, nframes - 1)
-                    
-                self.trace_ax.set_xlim(0, xmax)
-            except Exception:
-                pass
-
-        # Ensure we have a persistent vline and move it (create if missing)
-        if not hasattr(self.window, '_frame_vline') or self.window._frame_vline is None:
-            self.window._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=10, linewidth=2)
-        else:
-            try:
-                self.window._frame_vline.set_xdata([current_x_pos, current_x_pos])
-            except Exception:
-                # recreate fallback
-                self.window._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=10, linewidth=2)
-
-        # Redraw canvas (fast)
-        try:
-            self.trace_canvas.draw_idle()
-        except Exception:
-            pass
+        """Lightweight: update only the vertical frame line on the existing trace - delegated to trace plot widget."""
+        self.trace_plot_widget._update_trace_vline()
 
     def _reset_ylim(self):
-        """Clear any user-set y-limits and revert to autoscaling."""
-        if hasattr(self, 'ylim_min_edit'):
-            self.ylim_min_edit.setText("")
-        if hasattr(self, 'ylim_max_edit'):
-            self.ylim_max_edit.setText("")
-        self._update_trace_from_roi()
+        """Clear any user-set y-limits and revert to autoscaling - delegated to trace plot widget."""
+        self.trace_plot_widget._reset_ylim()
     
     def _toggle_time_display(self):
-        """Toggle between showing frame numbers and time in seconds on the trace plot."""
-        self._show_time_in_seconds = not getattr(self, '_show_time_in_seconds', False)
-        
-        # Update button text to show current mode
-        if self._show_time_in_seconds:
-            self.time_display_button.setText("Seconds")
-        else:
-            self.time_display_button.setText("Frames")
-        
-        # Update the trace plot with new x-axis
-        self._update_trace_from_roi()
+        """Toggle between showing frame numbers and time in seconds - delegated to trace plot widget."""
+        self.trace_plot_widget._toggle_time_display()
+        # Sync the internal flag
+        self._show_time_in_seconds = self.trace_plot_widget._show_time_in_seconds
     
-    def _compute_draw_rect_for_label(self, label, img_w: int, img_h: int):
-        """Return the QRect inside `label` where the image pixmap will be drawn
-        when scaled with aspect ratio preserved."""
-        lw, lh = label.width(), label.height()
-        if img_w <= 0 or img_h <= 0 or lw <= 0 or lh <= 0:
-            from PyQt6.QtCore import QRect
-            return QRect(0, 0, 0, 0)
-
-        scale = min(lw / img_w, lh / img_h)
-        sw = int(img_w * scale)  # scaled width
-        sh = int(img_h * scale)  # scaled height
-        x = (lw - sw) // 2
-        y = (lh - sh) // 2
-
-        from PyQt6.QtCore import QRect
-        return QRect(x, y, sw, sh)
-
+    
     def keyPressEvent(self, event):
         """Handle key press events. Escape clears the current ROI selection and trace plot."""
         from PyQt6.QtCore import Qt
@@ -2513,33 +2084,8 @@ class AnalysisWidget(QWidget):
         if hasattr(self.window, '_last_roi_rotation'):
             self.window._last_roi_rotation = 0.0
         
-        # Clear the trace plot
-        if hasattr(self, 'trace_ax') and self.trace_ax is not None:
-            self.trace_ax.cla()
-            
-            # Reset the plot appearance
-            self.trace_ax.set_xticks([])
-            self.trace_ax.set_yticks([])
-            self.trace_ax.set_xlabel("")
-            self.trace_ax.set_ylabel("")
-            for spine in self.trace_ax.spines.values():
-                spine.set_visible(True)
-            self.trace_ax.set_facecolor('none')
-            self.trace_ax.xaxis.label.set_color('white')
-            self.trace_ax.yaxis.label.set_color('white')
-            self.trace_ax.tick_params(axis='x', colors='white')
-            self.trace_ax.tick_params(axis='y', colors='white')
-            for spine in self.trace_ax.spines.values():
-                spine.set_color('white')
-                
-        # Clear the frame vline reference
-        if hasattr(self.window, '_frame_vline'):
-            self.window._frame_vline = None
-            
-        # Redraw the trace canvas
-        if hasattr(self, 'trace_canvas') and self.trace_canvas is not None:
-            self.trace_fig.tight_layout()
-            self.trace_canvas.draw()
+        # Clear the trace plot using the trace plot widget
+        self.trace_plot_widget.clear_trace()
 
     def _load_stimulated_rois(self):
         """Load stimulated ROIs from the current folder and add them as S1, S2, etc."""
@@ -2621,33 +2167,6 @@ class AnalysisWidget(QWidget):
             except Exception:
                 pass
 
-    def _resize_widget_for_new_image(self, new_width, new_height):
-        """Resize the reg_tif_label widget to accommodate a new image with different dimensions.
-        
-        Args:
-            new_width: Width of the new image
-            new_height: Height of the new image
-        """
-        # Reset the size policy to allow proper resizing
-        self.reg_tif_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        
-        # Set a reasonable minimum size that accommodates different image sizes
-        # Use at least the original minimum size (700x629) or larger if needed
-        min_width = max(new_width + 40, 700)  # Ensure at least original width or larger
-        min_height = max(new_height + 40, 629)  # Ensure at least original height or larger
-        
-        # Cap at reasonable maximums to prevent huge widgets
-        min_width = min(min_width, 1200)
-        min_height = min(min_height, 1000)
-        
-        self.reg_tif_label.setMinimumSize(min_width, min_height)
-        
-        # Force an update of the layout
-        self.reg_tif_label.updateGeometry()
-        self.update()
-        
-        print(f"DEBUG: Resized widget for image {new_width}x{new_height} -> min size {min_width}x{min_height}")
-
     def _check_and_resize_for_image_change(self, tif, previous_img_wh):
         """Check if image dimensions changed and resize widget if needed.
         
@@ -2664,7 +2183,7 @@ class AnalysisWidget(QWidget):
         # Check if dimensions changed
         if previous_img_wh is None or previous_img_wh != new_img_wh:
             print(f"DEBUG: Image size changed from {previous_img_wh} to {new_img_wh}")
-            self._resize_widget_for_new_image(new_img_wh[0], new_img_wh[1])
+            self.image_view.resize_for_new_image(new_img_wh[0], new_img_wh[1])
         else:
             print(f"DEBUG: Image size unchanged: {new_img_wh}")
         
