@@ -8,7 +8,7 @@ preservation, and ROI tool integration.
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QFont, QColor
 import numpy as np
 import os
 import pickle
@@ -63,12 +63,14 @@ class ImageViewWidget(QWidget):
         """Set a loading message."""
         self.reg_tif_label.setText(message)
     
-    def display_image(self, arr_uint8):
+    def display_image(self, arr_uint8, show_scale_bar=False, metadata=None):
         """
         Display an image array with proper scaling and aspect ratio preservation.
         
         Args:
             arr_uint8: RGBA uint8 array with shape (height, width, 4)
+            show_scale_bar: Whether to draw scale bar on the image
+            metadata: Experiment metadata for scale bar calculations
         """
         if arr_uint8 is None or arr_uint8.size == 0:
             self.reg_tif_label.setText("Error: Image data is empty or corrupted.")
@@ -92,6 +94,13 @@ class ImageViewWidget(QWidget):
         
         # Scale and display the final pixmap with aspect ratio preservation
         base_pix = pixmap.scaled(self.reg_tif_label.size(), Qt.AspectRatioMode.KeepAspectRatio)
+        
+        # Add scale bar if requested
+        if show_scale_bar and metadata is not None:
+            pixel_size = self.get_pixel_size_from_metadata(metadata)
+            if pixel_size is not None:
+                base_pix = self.draw_scale_bar(base_pix, pixel_size, w, h)
+        
         self.reg_tif_label.setFixedSize(base_pix.size())
         self.reg_tif_label.setPixmap(base_pix)
         self.reg_tif_label.setText("")
@@ -101,7 +110,7 @@ class ImageViewWidget(QWidget):
         
         return base_pix
     
-    def display_image_with_bnc(self, arr_uint8, bnc_settings=None, img=None, img_chan2=None, composite_mode=False, active_channel=1):
+    def display_image_with_bnc(self, arr_uint8, bnc_settings=None, img=None, img_chan2=None, composite_mode=False, active_channel=1, show_scale_bar=False, metadata=None):
         """
         Display an image with optional brightness/contrast adjustments.
         
@@ -112,6 +121,8 @@ class ImageViewWidget(QWidget):
             img_chan2: Optional second channel image for BnC processing
             composite_mode: Whether composite mode is active
             active_channel: Which channel is active (1 or 2)
+            show_scale_bar: Whether to draw scale bar on the image
+            metadata: Experiment metadata for scale bar calculations
         """
         if arr_uint8 is None or arr_uint8.size == 0:
             self.reg_tif_label.setText("Error: Image data is empty or corrupted.")
@@ -178,6 +189,13 @@ class ImageViewWidget(QWidget):
         
         # Scale and display the final pixmap with aspect ratio preservation
         base_pix = pixmap.scaled(self.reg_tif_label.size(), Qt.AspectRatioMode.KeepAspectRatio)
+        
+        # Add scale bar if requested
+        if show_scale_bar and metadata is not None:
+            pixel_size = self.get_pixel_size_from_metadata(metadata)
+            if pixel_size is not None:
+                base_pix = self.draw_scale_bar(base_pix, pixel_size, w, h)
+        
         self.reg_tif_label.setFixedSize(base_pix.size())
         self.reg_tif_label.setPixmap(base_pix)
         self.reg_tif_label.setText("")
@@ -497,3 +515,153 @@ class ImageViewWidget(QWidget):
         self.clear_pixmap()
         self._current_image_np = None
         self._current_qimage = None
+
+    def draw_scale_bar(self, pixmap, pixel_size_microns, img_width, img_height):
+        """
+        Draw a scale bar on the given pixmap.
+        
+        Args:
+            pixmap: QPixmap to draw on
+            pixel_size_microns: Size of one pixel in microns (from metadata)
+            img_width: Original image width in pixels
+            img_height: Original image height in pixels
+            
+        Returns:
+            QPixmap with scale bar drawn
+        """
+        if pixel_size_microns is None or pixel_size_microns <= 0:
+            print("DEBUG: Invalid pixel size for scale bar")
+            return pixmap
+        
+        # Create a copy to draw on
+        pixmap_with_scale = QPixmap(pixmap)
+        painter = QPainter(pixmap_with_scale)
+        
+        try:
+            # Calculate scale factor between original image and displayed pixmap
+            scale_factor = min(pixmap.width() / img_width, pixmap.height() / img_height)
+            
+            # Calculate appropriate scale bar length
+            # Aim for ~10% of image width, rounded to nice values
+            desired_length_pixels = img_width * 0.1
+            desired_length_microns = desired_length_pixels * pixel_size_microns
+            
+            # Round to nice values (1, 2, 5, 10, 20, 50, 100, etc.)
+            scale_bar_microns = self._round_to_nice_value(desired_length_microns)
+            scale_bar_pixels = scale_bar_microns / pixel_size_microns
+            
+            # Scale to displayed pixmap size
+            display_scale_bar_pixels = scale_bar_pixels * scale_factor
+            
+            # Position scale bar at bottom right
+            margin = 20
+            bar_height = 4
+            text_height = 15
+            
+            # Ensure scale bar fits within image bounds
+            min_margin = 10
+            max_bar_width = pixmap.width() - (2 * min_margin)
+            if display_scale_bar_pixels > max_bar_width:
+                # If calculated scale bar is too long, recalculate with smaller size
+                display_scale_bar_pixels = max_bar_width
+                scale_bar_pixels = display_scale_bar_pixels / scale_factor
+                scale_bar_microns = scale_bar_pixels * pixel_size_microns
+            
+            # Scale bar rectangle
+            bar_x = pixmap.width() - display_scale_bar_pixels - margin
+            bar_y = pixmap.height() - margin - bar_height - text_height - 5
+            
+            # Ensure minimum margins
+            bar_x = max(min_margin, bar_x)
+            bar_y = max(min_margin, bar_y)
+            
+            # No background - transparent scale bar
+            # (Removed background rectangle for fully transparent appearance)
+            
+            # Draw scale bar
+            painter.setPen(QPen(QColor(Qt.GlobalColor.white), 2))  # White, 2px wide
+            painter.drawRect(int(bar_x), int(bar_y), int(display_scale_bar_pixels), bar_height)
+            
+            # Draw text label
+            font = QFont()
+            font.setPointSize(10)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QPen(QColor(Qt.GlobalColor.white), 1))  # Black text
+            
+            # Format label
+            if scale_bar_microns >= 1000:
+                label = f"{scale_bar_microns/1000:.0f} mm"
+            elif scale_bar_microns >= 1:
+                label = f"{scale_bar_microns:.0f} μm"
+            else:
+                label = f"{scale_bar_microns:.1f} μm"
+            
+            text_x = bar_x + (display_scale_bar_pixels / 2) - (len(label) * 3)  # Rough centering
+            text_y = bar_y + bar_height + text_height
+            painter.drawText(int(text_x), int(text_y), label)
+            
+        finally:
+            painter.end()
+        
+        return pixmap_with_scale
+
+    def _round_to_nice_value(self, value):
+        """
+        Round a value to a nice scale bar length (1, 2, 5, 10, 20, 50, 100, etc.)
+        """
+        if value <= 0:
+            return 1
+        
+        # Find the appropriate order of magnitude
+        magnitude = 10 ** np.floor(np.log10(value))
+        normalized = value / magnitude
+        
+        # Choose nice values
+        if normalized <= 1:
+            nice_value = 1
+        elif normalized <= 2:
+            nice_value = 2
+        elif normalized <= 5:
+            nice_value = 5
+        else:
+            nice_value = 10
+        
+        return nice_value * magnitude
+
+    def get_pixel_size_from_metadata(self, metadata):
+        """
+        Extract pixel size in microns from experiment metadata.
+        
+        Args:
+            metadata: Experiment metadata dict or object
+            
+        Returns:
+            float: Pixel size in microns per pixel, or None if not found
+        """
+        if metadata is None:
+            return None
+        
+        try:
+            # Try different possible locations for pixel size
+            if isinstance(metadata, dict):
+                # Check direct key
+                if 'pixel_size' in metadata:
+                    return float(metadata['pixel_size'])
+                
+                # Check nested structure from ImageRecord.yaml
+                if ('ImageRecord.yaml' in metadata and 
+                    'CLensDef70' in metadata['ImageRecord.yaml'] and
+                    'mMicronPerPixel' in metadata['ImageRecord.yaml']['CLensDef70']):
+                    return float(metadata['ImageRecord.yaml']['CLensDef70']['mMicronPerPixel'])
+                    
+            # Try as object with attributes
+            elif hasattr(metadata, 'pixel_size'):
+                return float(metadata.pixel_size)
+            elif hasattr(metadata, 'mMicronPerPixel'):
+                return float(metadata.mMicronPerPixel)
+                
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            print(f"DEBUG: Could not extract pixel size from metadata: {e}")
+        
+        return None

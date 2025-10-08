@@ -8,7 +8,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
     QPushButton, QLabel, QSlider, QLineEdit, QComboBox, QSizePolicy,
-    QFileDialog, QMessageBox, QGridLayout
+    QFileDialog, QMessageBox, QGridLayout, QCheckBox
 )
 from PyQt6.QtCore import Qt
 
@@ -145,6 +145,12 @@ class AnalysisWidget(QWidget):
         self.view_metadata_button.setEnabled(False)
         self.view_metadata_button.clicked.connect(self.open_metadata_viewer)
 
+        # Create a checkbox for view scale bar
+        self.scale_bar_checkbox = QCheckBox("Show Scale Bar")
+        self.scale_bar_checkbox.setChecked(False)
+        self.scale_bar_checkbox.setEnabled(False)  # Initially disabled
+        self.scale_bar_checkbox.stateChanged.connect(self.toggle_scale_bar)
+
         mid_vbox.addWidget(self.file_type_button)
         mid_vbox.addWidget(self.channel_button)
         mid_vbox.addWidget(self.cnb_button)
@@ -154,7 +160,8 @@ class AnalysisWidget(QWidget):
         mid_vbox.addWidget(self.zproj_max_button)
         mid_vbox.addWidget(self.zproj_mean_button)
         mid_vbox.addWidget(self.view_metadata_button)
-        mid_vbox.addStretch(1)
+        mid_vbox.addStretch(0.5)
+        mid_vbox.addWidget(self.scale_bar_checkbox)
 
         # --- Display panel: reg_tif image display and slider ---
         display_panel = QVBoxLayout()
@@ -423,6 +430,7 @@ class AnalysisWidget(QWidget):
         self.zproj_max_button.setEnabled(False)
         self.zproj_mean_button.setEnabled(False)
         self.view_metadata_button.setEnabled(False)
+        self.scale_bar_checkbox.setEnabled(False)
 
     def _update_ui_from_experiment_data(self, data, previous_img_wh):
         """Update UI state based on loaded experiment data."""
@@ -477,6 +485,9 @@ class AnalysisWidget(QWidget):
         
         # Enable metadata viewer button when experiment data is loaded
         self.view_metadata_button.setEnabled(True)
+        
+        # Enable scale bar checkbox when experiment data is loaded
+        self.scale_bar_checkbox.setEnabled(True)
         
         # Check if image dimensions changed and resize if needed
         self._check_and_resize_for_image_change(tif, previous_img_wh)
@@ -709,7 +720,9 @@ class AnalysisWidget(QWidget):
             img=img, 
             img_chan2=img_chan2, 
             composite_mode=composite_mode, 
-            active_channel=active_channel
+            active_channel=active_channel,
+            show_scale_bar=self.scale_bar_checkbox.isChecked(),
+            metadata=getattr(self.window, '_exp_data', None)
         )
         
         # Store current image data for backward compatibility
@@ -816,6 +829,11 @@ class AnalysisWidget(QWidget):
             if hasattr(self.roi_tool, 'set_stim_rois'):
                 self.roi_tool.set_stim_rois([])
                 self.roi_tool._paint_overlay()
+
+    def toggle_scale_bar(self):
+        """Toggle the display of scale bar on the image."""
+        # Update the current frame to show/hide scale bar
+        self.update_tif_frame()
 
     def _on_hide_rois_toggled(self, state):
         """Hide or show saved/stim ROIs when checkbox toggled."""
