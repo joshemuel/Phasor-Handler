@@ -288,13 +288,22 @@ class TraceplotWidget(QWidget):
                 
                 if ed is not None:
                     # Try different possible attribute names for time stamps
+                    # Handle both dictionary and object metadata formats
                     for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                        if hasattr(ed, attr_name):
-                            time_stamps = getattr(ed, attr_name)
-                            print(f"DEBUG: Found time stamps in attribute '{attr_name}', length: {len(time_stamps) if hasattr(time_stamps, '__len__') else 'unknown'}")
-                            if hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
-                                print(f"DEBUG: First few time stamps: {time_stamps[:min(5, len(time_stamps))]}")
-                            break
+                        if isinstance(ed, dict):
+                            if attr_name in ed:
+                                time_stamps = ed[attr_name]
+                                print(f"DEBUG: Found time stamps in dict key '{attr_name}', length: {len(time_stamps) if hasattr(time_stamps, '__len__') else 'unknown'}")
+                                if hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
+                                    print(f"DEBUG: First few time stamps: {time_stamps[:min(5, len(time_stamps))]}")
+                                break
+                        else:
+                            if hasattr(ed, attr_name):
+                                time_stamps = getattr(ed, attr_name)
+                                print(f"DEBUG: Found time stamps in attribute '{attr_name}', length: {len(time_stamps) if hasattr(time_stamps, '__len__') else 'unknown'}")
+                                if hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
+                                    print(f"DEBUG: First few time stamps: {time_stamps[:min(5, len(time_stamps))]}")
+                                break
                 
                 if time_stamps is not None and len(time_stamps) >= len(metric):
                     # Use time stamps as x-axis (convert from ms to seconds)
@@ -341,7 +350,13 @@ class TraceplotWidget(QWidget):
             if ed is None:
                 stims = []
             else:
-                stims = getattr(ed, 'stimulation_timeframes', [])
+                # Handle both dictionary and object metadata formats
+                if isinstance(ed, dict):
+                    stims = ed.get('stimulation_timeframes', [])
+                else:
+                    stims = getattr(ed, 'stimulation_timeframes', [])
+                
+                print(f"DEBUG: Found {len(stims)} stimulation timeframes: {stims}")
 
             # Convert stimulation timeframes to appropriate x-axis units
             if show_time and x_values is not None:
@@ -350,12 +365,17 @@ class TraceplotWidget(QWidget):
                     stim_frame = int(stim)
                     if stim_frame < len(time_stamps):
                         stim_x_pos = time_stamps[stim_frame] / 1000.0
+                        print(f"DEBUG: Adding stimulation vline at time {stim_x_pos:.2f}s (frame {stim_frame})")
                         self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
             else:
                 # Use frame numbers
-                [self.trace_ax.axvline(int(stim), color='red', linestyle='--', zorder=15, linewidth=2) for stim in stims]
-        except Exception:
+                for stim in stims:
+                    stim_frame = int(stim)
+                    print(f"DEBUG: Adding stimulation vline at frame {stim_frame}")
+                    self.trace_ax.axvline(stim_frame, color='red', linestyle='--', zorder=15, linewidth=2)
+        except Exception as e:
             # keep plotting even if stim drawing fails
+            print(f"DEBUG: Error adding stimulation vlines: {e}")
             pass
 
         # Parse y-limits from the QLineEdits (if present) and apply them
@@ -416,16 +436,25 @@ class TraceplotWidget(QWidget):
                 
                 if ed is not None:
                     # Try different possible attribute names for time stamps
+                    # Handle both dictionary and object metadata formats
                     for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                        if hasattr(ed, attr_name):
-                            time_stamps = getattr(ed, attr_name)
-                            break
+                        if isinstance(ed, dict):
+                            if attr_name in ed:
+                                time_stamps = ed[attr_name]
+                                break
+                        else:
+                            if hasattr(ed, attr_name):
+                                time_stamps = getattr(ed, attr_name)
+                                break
                 
                 if time_stamps is not None and current_frame < len(time_stamps):
                     current_x_pos = time_stamps[current_frame] / 1000.0
                 elif ed is not None:
                     # Fallback: estimate time based on frame rate
-                    frame_rate = getattr(ed, 'frame_rate', None)
+                    if isinstance(ed, dict):
+                        frame_rate = ed.get('frame_rate', None)
+                    else:
+                        frame_rate = getattr(ed, 'frame_rate', None)
                     if frame_rate and frame_rate > 0:
                         current_x_pos = current_frame / frame_rate
             except Exception:

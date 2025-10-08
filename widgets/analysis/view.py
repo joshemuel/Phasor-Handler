@@ -19,7 +19,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import numpy as np
 import sys
 
-from .components import ImageViewWidget, TraceplotWidget, BnCDialog, CircleRoiTool
+from .components import ImageViewWidget, TraceplotWidget, BnCDialog, CircleRoiTool, RoiListWidget
 
 
 class AnalysisWidget(QWidget):
@@ -55,7 +55,8 @@ class AnalysisWidget(QWidget):
         if not hasattr(self.window, '_cnb_window'):
             self.window._cnb_window = None
 
-        # Track which saved ROI is currently being edited (None = not editing any)
+        # Track which saved ROI is currently being edited (delegated to ROI component)
+        # This is kept for backward compatibility but the actual state is in roi_list_component
         self._editing_roi_index = None
 
         widget = self
@@ -166,7 +167,6 @@ class AnalysisWidget(QWidget):
 
         # --- ROI Tool Integration ---
         self.roi_tool = CircleRoiTool(self.reg_tif_label)
-        self.roi_tool.roiChanged.connect(self._on_roi_changed)
         self.roi_tool.roiFinalized.connect(self._on_roi_finalized)
         self.roi_tool.roiSelected.connect(self._on_roi_selected_by_click)
         print("DEBUG: ROI tool signals connected")
@@ -183,11 +183,6 @@ class AnalysisWidget(QWidget):
 
         # Connect selection change to widget-local handlers
         self.analysis_list_widget.currentItemChanged.connect(self._on_item_changed_with_roi_preservation)
-
-        # ROI Items (Right panel)
-        self.roi_list_widget = QListWidget()
-        self.roi_list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.roi_list_widget.setMinimumWidth(220)
 
         # --- Bottom panel: Plot the signal of a given area ---
         bottom_panel = QHBoxLayout()
@@ -212,81 +207,21 @@ class AnalysisWidget(QWidget):
         # Maintain internal compatibility for display mode tracking
         self._show_time_in_seconds = False
 
+        # --- Create ROI List Component ---
+        self.roi_list_component = RoiListWidget(self.window)
+        
+        # Connect ROI component signals
+        self.roi_list_component.roiSelected.connect(self._on_roi_component_selected)
+        self.roi_list_component.roiAdded.connect(self._on_roi_component_added)
+        
+        # Expose the internal list widget for backward compatibility
+        self.roi_list_widget = self.roi_list_component.get_list_widget()
+
         # --- Assemble layouts ---
         main_hbox.addLayout(left_vbox, 1)  # Allow directory list to expand
         main_hbox.addLayout(mid_vbox, 0)
         main_hbox.addLayout(display_panel, 2)  # Allow image display to expand with higher priority
-        # Wrap ROI list in a group similar to Registered Directories
-        roi_group = QGroupBox("Saved ROIs")
-        roi_vbox = QVBoxLayout()
-        roi_vbox.addWidget(self.roi_list_widget)
-
-        roi_grid_layout = QGridLayout()
-        add_roi_btn = QPushButton("Add ROI")
-        remove_roi_btn = QPushButton("Remove ROI")
-        export_trace_btn = QPushButton("Export Trace...")
-        self.hide_rois_checkbox = None
-        self.display_labels_checkbox = None
-        try:
-            from PyQt6.QtWidgets import QCheckBox
-            self.hide_rois_checkbox = QCheckBox("Hide ROIs")
-            self.hide_rois_checkbox.setChecked(False)
-            self.hide_rois_checkbox.setToolTip("Hide saved and drawn ROIs from the image view")
-            self.hide_rois_checkbox.stateChanged.connect(lambda s: self._on_hide_rois_toggled(s))
-            
-            self.display_labels_checkbox = QCheckBox("Hide Labels")
-            self.display_labels_checkbox.setChecked(False)
-            self.display_labels_checkbox.setToolTip("Show or hide text labels within ROIs")
-            self.display_labels_checkbox.stateChanged.connect(lambda s: self._on_hide_labels_toggled(s))
-        except Exception:
-            self.hide_rois_checkbox = None
-            self.display_labels_checkbox = None
-        save_roi_btn = QPushButton("Save ROIs...")
-        load_roi_btn = QPushButton("Load ROIs...")
-        add_roi_btn.setFixedWidth(110)
-        remove_roi_btn.setFixedWidth(110)
-        export_trace_btn.setFixedWidth(110)
-        save_roi_btn.setFixedWidth(110)
-        load_roi_btn.setFixedWidth(110)
-        roi_grid_layout.addWidget(add_roi_btn, 0, 0)       # Row 0, Column 0
-        roi_grid_layout.addWidget(remove_roi_btn, 0, 1)    # Row 0, Column 1
-        roi_grid_layout.addWidget(save_roi_btn, 1, 0)      # Row 1, Column 0
-        roi_grid_layout.addWidget(load_roi_btn, 1, 1)      # Row 1, Column 1
-        roi_grid_layout.addWidget(export_trace_btn, 2, 0, 1, 2)  
-
-        if self.hide_rois_checkbox is not None:
-            roi_grid_layout.addWidget(self.hide_rois_checkbox, 3, 0, 1, 2)
-            
-        if self.display_labels_checkbox is not None:
-            roi_grid_layout.addWidget(self.display_labels_checkbox, 3, 1, 1, 2)
-
-        roi_vbox.addLayout(roi_grid_layout)
-        roi_group.setLayout(roi_vbox)
-        main_hbox.addWidget(roi_group, 1)  # Allow ROI list to expand too
-
-        add_roi_btn.clicked.connect(self._on_add_roi_clicked)
-        remove_roi_btn.clicked.connect(self._on_remove_roi_clicked)
-        save_roi_btn.clicked.connect(self._on_save_roi_positions_clicked)
-        load_roi_btn.clicked.connect(self._on_load_roi_positions_clicked)
-        export_trace_btn.clicked.connect(self._on_export_roi_clicked)
-        # Ensure checkbox initial visibility state sync with ROI tool
-        if self.hide_rois_checkbox is not None:
-            try:
-                # default: show ROIs
-                self.roi_tool.set_show_saved_rois(True)
-                self.roi_tool.set_show_stim_rois(True)
-            except Exception:
-                pass
-        
-        # Set initial label visibility state
-        if self.display_labels_checkbox is not None:
-            try:
-                # default: show labels
-                self.roi_tool.set_show_labels(True)
-            except Exception:
-                pass
-        # Selection change should restore saved ROI
-        self.roi_list_widget.currentItemChanged.connect(self._on_saved_roi_selected)
+        main_hbox.addWidget(self.roi_list_component, 1)  # Allow ROI list to expand too
 
 
         main_vbox.addLayout(main_hbox, 2)  # Image area gets highest priority
@@ -334,12 +269,6 @@ class AnalysisWidget(QWidget):
             self.window.analysis_list_widget.currentItemChanged.connect(self._on_item_changed_with_roi_preservation)
         except Exception:
             pass
-
-    def _on_image_updated(self):
-        """Handle when the image view widget updates its display."""
-        # This can be used for any post-image-update processing
-        # Currently just for future extensibility
-        pass
 
     def _on_item_changed_with_roi_preservation(self, current, previous=None):
         """Handle item changes while preserving ROI information across selections."""
@@ -438,19 +367,8 @@ class AnalysisWidget(QWidget):
 
     def display_reg_tif_image(self, current, previous=None):
         """Load registered tif(s) for the selected directory and initialize slider/view."""
-        from PyQt6.QtGui import QImage, QPixmap
-        import tifffile
-        import os
-        import pickle
-        import subprocess
-        from PyQt6.QtWidgets import QApplication
-        
         if not current:
-            self.image_view.clear_pixmap()
-            self.tif_slider.setEnabled(False)
-            self.tif_slider.setMaximum(0)
-            self.window._current_tif = None
-            self.file_type_button.setEnabled(False)
+            self._clear_experiment_state()
             return
 
         # Store previous image dimensions before loading new image
@@ -460,483 +378,97 @@ class AnalysisWidget(QWidget):
         reg_dir = current.data(Qt.ItemDataRole.UserRole)
         if reg_dir is None:
             reg_dir = current.text()
-        reg_tif_path = os.path.join(reg_dir, "Ch1-reg.tif")
-        reg_tif_chan2_path = os.path.join(reg_dir, "Ch2-reg.tif")
-        exp_details = os.path.join(reg_dir, "experiment_summary.pkl")
-        exp_json = os.path.join(reg_dir, "experiment_summary.json")
 
-        # Initialize variables
-        tif = None
-        tif_chan2 = None
-
-        # Determine file paths based on user preference
-        npy_ch0_path = os.path.join(reg_dir, "ImageData_Ch0_TP0000000.npy")
-        npy_ch1_path = os.path.join(reg_dir, "ImageData_Ch1_TP0000000.npy")
+        # Load experiment data using ImageViewWidget
+        data = self.image_view.load_experiment_data(reg_dir, getattr(self, '_using_registered', True))
         
-        # Check what files are available
-        has_registered_tif = os.path.isfile(reg_tif_path)
-        has_raw_numpy = os.path.isfile(npy_ch0_path)
-        
-        # Determine which files to use based on preference and availability
-        use_registered = getattr(self, '_using_registered', True)
-        
-        if use_registered and has_registered_tif:
-            # Load registered TIFF files
-            self.image_view.set_loading_message("Loading registered TIFF files...")
-            try:
-                # First, check the TIFF file properties before loading
-                import os
-                file_size = os.path.getsize(reg_tif_path) / (1024*1024)  # MB
-                print(f"DEBUG: TIFF file size: {file_size:.1f} MB at {reg_tif_path}")
-                
-                # Try to get page count using multiple methods
-                page_count = None
-                try:
-                    with tifffile.TiffFile(reg_tif_path) as tiff:
-                        page_count = len(tiff.pages)
-                        print(f"DEBUG: TIFF file contains {page_count} pages/frames")
-                        
-                        # Sample a few page dimensions
-                        if page_count > 0:
-                            first_page = tiff.pages[0]
-                            print(f"DEBUG: First page shape: {first_page.shape}")
-                            if page_count > 1:
-                                print(f"DEBUG: Checking page consistency...")
-                                # Check if all pages have same dimensions
-                                for i in [min(10, page_count-1), min(100, page_count-1), page_count-1]:
-                                    if i < page_count and i != 0:
-                                        page_shape = tiff.pages[i].shape
-                                        print(f"DEBUG: Page {i} shape: {page_shape}")
-                except Exception as page_error:
-                    print(f"DEBUG: Could not examine TIFF pages with tifffile: {page_error}")
-                    
-                    # Try with tifftools as alternative
-                    try:
-                        import tifftools
-                        info = tifftools.read_tiff(reg_tif_path)
-                        if 'ifds' in info:
-                            page_count = len(info['ifds'])
-                            print(f"DEBUG: tifftools found {page_count} pages/frames")
-                    except Exception as tt_error:
-                        print(f"DEBUG: tifftools also failed: {tt_error}")
-                
-                # Now try multiple loading methods
-                tif = None
-                loading_method = "unknown"
-                
-                # Method 1: Standard tifffile.imread
-                try:
-                    print(f"DEBUG: Method 1 - Loading with tifffile.imread()...")
-                    tif = tifffile.imread(reg_tif_path)
-                    loading_method = "tifffile.imread"
-                    print(f"DEBUG: Method 1 SUCCESS - Ch1 shape: {tif.shape}, dtype: {tif.dtype}")
-                    
-                    # Check if we got all expected frames
-                    actual_frames = tif.shape[0] if tif.ndim >= 3 else 1
-                    if page_count and actual_frames != page_count:
-                        print(f"DEBUG: WARNING - Loaded {actual_frames} frames but TIFF has {page_count} pages!")
-                        raise ValueError(f"Frame count mismatch: got {actual_frames}, expected {page_count}")
-                        
-                except Exception as method1_error:
-                    print(f"DEBUG: Method 1 FAILED: {method1_error}")
-                    
-                    # Method 2: tifffile with memory mapping disabled
-                    try:
-                        print(f"DEBUG: Method 2 - Loading with memmap=False...")
-                        tif = tifffile.imread(reg_tif_path, memmap=False)
-                        loading_method = "tifffile.imread(memmap=False)"
-                        print(f"DEBUG: Method 2 SUCCESS - Ch1 shape: {tif.shape}, dtype: {tif.dtype}")
-                    except Exception as method2_error:
-                        print(f"DEBUG: Method 2 FAILED: {method2_error}")
-                        
-                        # Method 3: Load page by page
-                        try:
-                            print(f"DEBUG: Method 3 - Loading page by page...")
-                            with tifffile.TiffFile(reg_tif_path) as tiff:
-                                if len(tiff.pages) > 0:
-                                    # Get dimensions from first page
-                                    first_page_array = tiff.pages[0].asarray()
-                                    page_shape = first_page_array.shape
-                                    total_pages = len(tiff.pages)
-                                    
-                                    print(f"DEBUG: Creating array for {total_pages} pages of shape {page_shape}")
-                                    tif = np.zeros((total_pages,) + page_shape, dtype=first_page_array.dtype)
-                                    
-                                    # Load each page
-                                    for i, page in enumerate(tiff.pages):
-                                        tif[i] = page.asarray()
-                                        if i % 500 == 0 or i < 5 or i >= total_pages - 3:
-                                            print(f"DEBUG: Loaded page {i}/{total_pages}")
-                                    
-                                    loading_method = "page-by-page loading"
-                                    print(f"DEBUG: Method 3 SUCCESS - Ch1 shape: {tif.shape}, dtype: {tif.dtype}")
-                                else:
-                                    raise ValueError("No pages found in TIFF file")
-                        except Exception as method3_error:
-                            print(f"DEBUG: Method 3 FAILED: {method3_error}")
-                            # Re-raise the original error if all methods fail
-                            raise method1_error
-                
-                print(f"DEBUG: Successfully loaded using: {loading_method}")
-                actual_frames = tif.shape[0] if tif.ndim >= 3 else 1
-                print(f"DEBUG: Final loaded array has {actual_frames} frames")
-                
-                if os.path.isfile(reg_tif_chan2_path):
-                    self.reg_tif_label.setText("Loading registered TIFF files (Channel 2)...")
-                    
-                    # Apply the same robust loading method to Channel 2
-                    file_size_ch2 = os.path.getsize(reg_tif_chan2_path) / (1024*1024)  # MB
-                    print(f"DEBUG: Ch2 TIFF file size: {file_size_ch2:.1f} MB at {reg_tif_chan2_path}")
-                    
-                    # Check Ch2 page count
-                    page_count_ch2 = None
-                    try:
-                        with tifffile.TiffFile(reg_tif_chan2_path) as tiff:
-                            page_count_ch2 = len(tiff.pages)
-                            print(f"DEBUG: Ch2 TIFF file contains {page_count_ch2} pages/frames")
-                    except Exception as page_error:
-                        print(f"DEBUG: Could not examine Ch2 TIFF pages: {page_error}")
-                    
-                    # Try multiple loading methods for Channel 2
-                    tif_chan2 = None
-                    ch2_loading_method = "unknown"
-                    
-                    # Method 1: Standard tifffile.imread
-                    try:
-                        print(f"DEBUG: Ch2 Method 1 - Loading with tifffile.imread()...")
-                        tif_chan2 = tifffile.imread(reg_tif_chan2_path)
-                        ch2_loading_method = "tifffile.imread"
-                        print(f"DEBUG: Ch2 Method 1 SUCCESS - shape: {tif_chan2.shape}, dtype: {tif_chan2.dtype}")
-                        
-                        # Check if we got all expected frames
-                        actual_frames_ch2 = tif_chan2.shape[0] if tif_chan2.ndim >= 3 else 1
-                        if page_count_ch2 and actual_frames_ch2 != page_count_ch2:
-                            print(f"DEBUG: Ch2 WARNING - Loaded {actual_frames_ch2} frames but TIFF has {page_count_ch2} pages!")
-                            raise ValueError(f"Ch2 Frame count mismatch: got {actual_frames_ch2}, expected {page_count_ch2}")
-                            
-                    except Exception as ch2_method1_error:
-                        print(f"DEBUG: Ch2 Method 1 FAILED: {ch2_method1_error}")
-                        
-                        # Method 2: Page-by-page loading for Ch2 (skip memmap since it's not supported)
-                        try:
-                            print(f"DEBUG: Ch2 Method 2 - Loading page by page...")
-                            with tifffile.TiffFile(reg_tif_chan2_path) as tiff:
-                                if len(tiff.pages) > 0:
-                                    # Get dimensions from first page
-                                    first_page_array = tiff.pages[0].asarray()
-                                    page_shape = first_page_array.shape
-                                    total_pages = len(tiff.pages)
-                                    
-                                    print(f"DEBUG: Ch2 Creating array for {total_pages} pages of shape {page_shape}")
-                                    tif_chan2 = np.zeros((total_pages,) + page_shape, dtype=first_page_array.dtype)
-                                    
-                                    # Load each page
-                                    for i, page in enumerate(tiff.pages):
-                                        tif_chan2[i] = page.asarray()
-                                        if i % 500 == 0 or i < 5 or i >= total_pages - 3:
-                                            print(f"DEBUG: Ch2 Loaded page {i}/{total_pages}")
-                                    
-                                    ch2_loading_method = "page-by-page loading"
-                                    print(f"DEBUG: Ch2 Method 2 SUCCESS - shape: {tif_chan2.shape}, dtype: {tif_chan2.dtype}")
-                                else:
-                                    raise ValueError("No pages found in Ch2 TIFF file")
-                        except Exception as ch2_method2_error:
-                            print(f"DEBUG: Ch2 Method 2 FAILED: {ch2_method2_error}")
-                            # Set to None if all methods fail
-                            tif_chan2 = None
-                            print(f"DEBUG: Ch2 loading completely failed, proceeding without Ch2")
-                    
-                    if tif_chan2 is not None:
-                        print(f"DEBUG: Ch2 successfully loaded using: {ch2_loading_method}")
-                        actual_frames_ch2 = tif_chan2.shape[0] if tif_chan2.ndim >= 3 else 1
-                        print(f"DEBUG: Ch2 final loaded array has {actual_frames_ch2} frames")
-                    
-                else:
-                    tif_chan2 = None
-                    print("DEBUG: No Ch2 file found")
-                    
-                self.window._current_tif = tif
-                self.window._current_tif_chan2 = tif_chan2
-                # DEBUG: print dtype and inferred bit depth for loaded images
-                try:
-                    dt = tif.dtype
-                    bits = dt.itemsize * 8
-                    print(f"DEBUG: Ch1 loaded dtype={dt}, inferred bits={bits}")
-                except Exception:
-                    print("DEBUG: Ch1 loaded, but couldn't determine dtype/bits")
-                try:
-                    if tif_chan2 is not None:
-                        dt2 = tif_chan2.dtype
-                        bits2 = dt2.itemsize * 8
-                        print(f"DEBUG: Ch2 loaded dtype={dt2}, inferred bits={bits2}")
-                    else:
-                        print("DEBUG: Ch2 not present")
-                except Exception:
-                    print("DEBUG: Ch2 loaded, but couldn't determine dtype/bits")
-                # Store last image width and height for ROI tools and resize widget if needed
-                self._check_and_resize_for_image_change(tif, previous_img_wh)
-            except Exception as e:
-                self.image_view.set_error_message(f"Failed to load registered TIFF: {e}")
-                self.tif_slider.setEnabled(False)
-                self.tif_slider.setMaximum(0)
-                self.window._current_tif = None
-                return
-        elif not use_registered and has_raw_numpy:
-            # Load raw numpy files
-            self.image_view.set_loading_message("Loading raw numpy files...")
-            
-            try:
-                if os.path.isfile(npy_ch0_path):
-                    self.reg_tif_label.setText("Loading Channel 1 numpy data...")
-                    tif = np.load(npy_ch0_path)
-                    print(f"DEBUG: Loaded raw numpy from {npy_ch0_path}")
-                    print(f"DEBUG: Raw Ch1 shape: {tif.shape}, dtype: {tif.dtype}")
-                    self.window._current_tif = tif
-                else:
-                    raise FileNotFoundError(f"Ch0 numpy file not found: {npy_ch0_path}")
-                    
-                if os.path.isfile(npy_ch1_path):
-                    self.reg_tif_label.setText("Loading Channel 2 numpy data...")
-                    tif_chan2 = np.load(npy_ch1_path)
-                    print(f"DEBUG: Raw Ch2 shape: {tif_chan2.shape}, dtype: {tif_chan2.dtype}")
-                    self.window._current_tif_chan2 = tif_chan2
-                else:
-                    self.window._current_tif_chan2 = None
-                    print("DEBUG: No raw Ch2 file found")
-                # DEBUG: print dtype and inferred bit depth for raw numpy files
-                try:
-                    dt = tif.dtype
-                    bits = dt.itemsize * 8
-                    print(f"DEBUG: Raw Ch1 loaded dtype={dt}, inferred bits={bits}")
-                except Exception:
-                    print("DEBUG: Raw Ch1 loaded, but couldn't determine dtype/bits")
-                try:
-                    if tif_chan2 is not None:
-                        dt2 = tif_chan2.dtype
-                        bits2 = dt2.itemsize * 8
-                        print(f"DEBUG: Raw Ch2 loaded dtype={dt2}, inferred bits={bits2}")
-                    else:
-                        print("DEBUG: Raw Ch2 not present")
-                except Exception:
-                    print("DEBUG: Raw Ch2 loaded, but couldn't determine dtype/bits")
-                    
-                # Store last image width and height for ROI tools and resize widget if needed
-                self._check_and_resize_for_image_change(tif, previous_img_wh)
-                    
-            except Exception as e:
-                self.reg_tif_label.setText(f"Failed to load numpy files: {e}")
-                self.reg_tif_label.setPixmap(QPixmap())
-                self.tif_slider.setEnabled(False)
-                self.tif_slider.setMaximum(0)
-                self.window._current_tif = None
-                return
-        elif use_registered and not has_registered_tif and has_raw_numpy:
-            # Fallback to numpy files if user wants registered but they don't exist
-            self.reg_tif_label.setPixmap(QPixmap())
-            self.reg_tif_label.setText("No registered TIFF files found. Loading raw numpy files...")
-            
-            try:
-                if os.path.isfile(npy_ch0_path):
-                    self.reg_tif_label.setText("Loading Channel 1 numpy data...")
-                    tif = np.load(npy_ch0_path)
-                    self.window._current_tif = tif
-                else:
-                    raise FileNotFoundError(f"Ch0 numpy file not found: {npy_ch0_path}")
-                    
-                if os.path.isfile(npy_ch1_path):
-                    self.reg_tif_label.setText("Loading Channel 2 numpy data...")
-                    tif_chan2 = np.load(npy_ch1_path)
-                    self.window._current_tif_chan2 = tif_chan2
-                else:
-                    self.window._current_tif_chan2 = None
-                    
-                # Store last image width and height for ROI tools and resize widget if needed
-                self._check_and_resize_for_image_change(tif, previous_img_wh)
-                    
-            except Exception as e:
-                self.reg_tif_label.setText(f"Failed to load numpy files: {e}")
-                self.reg_tif_label.setPixmap(QPixmap())
-                self.tif_slider.setEnabled(False)
-                self.tif_slider.setMaximum(0)
-                self.window._current_tif = None
-                return
-        elif not use_registered and not has_raw_numpy and has_registered_tif:
-            # Fallback to registered files if user wants raw but they don't exist
-            self.reg_tif_label.setText("No raw numpy files found. Loading registered TIFF files...")
-            try:
-                tif = tifffile.imread(reg_tif_path)
-                if os.path.isfile(reg_tif_chan2_path):
-                    self.reg_tif_label.setText("Loading registered TIFF files (Channel 2)...")
-                    tif_chan2 = tifffile.imread(reg_tif_chan2_path)
-                else:
-                    tif_chan2 = None
-                self.window._current_tif = tif
-                self.window._current_tif_chan2 = tif_chan2
-                # Store last image width and height for ROI tools and resize widget if needed
-                self._check_and_resize_for_image_change(tif, previous_img_wh)
-            except Exception as e:
-                self.reg_tif_label.setText(f"Failed to load registered TIFF: {e}")
-                self.reg_tif_label.setPixmap(QPixmap())
-                self.tif_slider.setEnabled(False)
-                self.tif_slider.setMaximum(0)
-                self.window._current_tif = None
-                return
-        else:
-            # Neither file type is available - show clear message to user
-            self.image_view.set_error_message("No image files found in this directory.\n\nThis directory doesn't contain:\n• Ch1-reg.tif (registered files)\n• ImageData_Ch0_TP0000000.npy (raw files)")
-            self.tif_slider.setEnabled(False)
-            self.tif_slider.setMaximum(0)
-            self.window._current_tif = None
-            self.window._current_tif_chan2 = None
-            self.file_type_button.setEnabled(False)
+        if not data['success']:
+            error_msg = data['error'] or "Unknown error loading experiment data"
+            self.image_view.set_error_message(f"Error loading {reg_dir}: {error_msg}")
+            self._clear_experiment_state()
             return
 
-        # Reading the experiment summary/metadata
-        self.window._exp_data = None
-        
-        # First try to read existing pickle file
-        if os.path.isfile(exp_details):
-            self.image_view.set_loading_message("Loading experiment metadata...")
-            try:
-                with open(exp_details, 'rb') as f:
-                    exp_data = pickle.load(f)
-                class ExpData:
-                    def __init__(self, data):
-                        for k, v in data.items():
-                            setattr(self, k, v)
-                self.window._exp_data = ExpData(exp_data)
-            except Exception as e:
-                self.reg_tif_label.setText("Failed to load existing metadata. Attempting to read from raw files...")
-                self.stimulation_area_button.setEnabled(False)
-        
-        # If no metadata exists or failed to load, try to read metadata from raw files
-        if self.window._exp_data is None:
-            self.image_view.set_loading_message("Reading metadata from raw files...")
-            # QApplication.processEvents()
-            try:
-                meta_cmd = [sys.executable, "scripts/meta_reader.py", "-f", str(reg_dir)]
-                meta_proc = subprocess.Popen(
-                    meta_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                )
-                
-                # Initialize conv_log if it doesn't exist
-                if not hasattr(self, 'conv_log'):
-                    self.conv_log = []
-                
-                for line in meta_proc.stdout:
-                    self.conv_log.append(line.rstrip())
-                    
-                meta_retcode = meta_proc.wait()
-                if meta_retcode != 0:
-                    self.conv_log.append(f"FAILED to read metadata: {reg_dir}\n")
-                    self.reg_tif_label.setText("Failed to read metadata from raw files.")
-                else:
-                    self.conv_log.append("--- Metadata read done ---\n")
-                    self.reg_tif_label.setText("Metadata reading completed. Loading experiment summary...")
-                    
-                    # Try to load the newly created pickle file
-                    if os.path.isfile(exp_details):
-                        try:
-                            with open(exp_details, 'rb') as f:
-                                exp_data = pickle.load(f)
-                            class ExpData:
-                                def __init__(self, data):
-                                    for k, v in data.items():
-                                        setattr(self, k, v)
-                            self.window._exp_data = ExpData(exp_data)
-                        except Exception as e:
-                            self.reg_tif_label.setText("Metadata read but failed to load experiment summary.")
-                            self.window._exp_data = None
-                            
-            except Exception as e:
-                if not hasattr(self, 'conv_log'):
-                    self.conv_log = []
-                self.conv_log.append(f"FAILED to read metadata: {reg_dir} (Error: {e})\n")
-                self.reg_tif_label.setText(f"Exception during metadata reading: {e}")
+        # Store loaded data on window for compatibility
+        self.window._current_tif = data['tif']
+        self.window._current_tif_chan2 = data['tif_chan2']
+        self.window._exp_data = data['metadata']
 
-        # Finalize loading and display image
-        self.image_view.set_loading_message("Preparing image display...")
+        # Update UI state based on loaded data
+        self._update_ui_from_experiment_data(data, previous_img_wh)
         
-        nframes = tif.shape[0] if tif.ndim == 3 else 1
-        
-        # If we have channel 2, limit frames to the minimum of both channels
-        if tif_chan2 is not None and tif_chan2.ndim == 3:
-            nframes_chan2 = tif_chan2.shape[0]
-            nframes = min(nframes, nframes_chan2)
-            print(f"DEBUG: Channel 1 has {tif.shape[0]} frames, Channel 2 has {nframes_chan2} frames")
-            print(f"DEBUG: Using minimum of {nframes} frames for slider")
+        # Display the first frame
+        self.update_tif_frame()
+
+    def _clear_experiment_state(self):
+        """Clear all experiment-related state."""
+        self.image_view.clear_experiment()
+        self.tif_slider.setEnabled(False)
+        self.tif_slider.setMaximum(0)
+        self.window._current_tif = None
+        self.window._current_tif_chan2 = None
+        self.window._exp_data = None
+        self.file_type_button.setEnabled(False)
+        self.channel_button.setEnabled(False)
+        self.composite_button.setEnabled(False)
+        self.stimulation_area_button.setEnabled(False)
+        self.cnb_button.setEnabled(False)
+        self.zproj_std_button.setEnabled(False)
+        self.zproj_max_button.setEnabled(False)
+        self.zproj_mean_button.setEnabled(False)
+
+    def _update_ui_from_experiment_data(self, data, previous_img_wh):
+        """Update UI state based on loaded experiment data."""
+        nframes = data['nframes']
+        has_registered_tif = data['has_registered_tif']
+        has_raw_numpy = data['has_raw_numpy']
+        tif = data['tif']
+        tif_chan2 = data['tif_chan2']
         
         print(f"DEBUG: Detected {nframes} frames from tif.shape: {tif.shape}")
         print(f"DEBUG: tif.ndim = {tif.ndim}")
         
+        # Configure slider
         self.tif_slider.setEnabled(nframes > 1)
-        self.tif_slider.setMaximum(nframes-1)
+        self.tif_slider.setMaximum(nframes - 1)
         self.tif_slider.setValue(0)
         
         print(f"DEBUG: Slider configured - max: {nframes-1}, enabled: {nframes > 1}")
         
-        # Show final status before displaying image
-        self.image_view.set_loading_message("Loading image frames...")
-        
-        self.update_tif_frame()
-
         # Enable file type toggle if both file types are available
         self.file_type_button.setEnabled(has_registered_tif and has_raw_numpy)
-        # If there's no registered TIFF, make the button default indicate that
+        
+        # Update file type button text
         try:
-            if not has_registered_tif:
-                # Keep an explicit message when registration is absent
-                self.file_type_button.setText("No Registration")
+            use_registered = getattr(self, '_using_registered', True)
+            if use_registered:
+                self.file_type_button.setText("Show Raw" if has_raw_numpy else "Show Raw (N/A)")
             else:
-                # When registration exists, ensure the button reflects current preference
-                if getattr(self, '_using_registered', True):
-                    self.file_type_button.setText("Show Raw")
-                else:
-                    self.file_type_button.setText("Show Registration")
+                self.file_type_button.setText("Show Registered" if has_registered_tif else "Show Registered (N/A)")
         except Exception:
             pass
 
-        # Make the channel and composite buttons active if channel 2 exists
-        # Check for registered tiff first, then numpy file
-        has_channel2 = False
-        if os.path.isfile(reg_tif_chan2_path):
-            has_channel2 = True
-        elif tif_chan2 is not None:
-            has_channel2 = True
-            
+        # Configure channel and composite buttons
+        has_channel2 = tif_chan2 is not None
         if has_channel2:
+            self.channel_button.setEnabled(True)
             self.composite_button.setEnabled(True)
-            self._sync_channel_button_state()
         else:
-            self.composite_button.setEnabled(False)
             self.channel_button.setEnabled(False)
+            self.composite_button.setEnabled(False)
             
         # Enable z-projection buttons when an image is loaded
         self.zproj_std_button.setEnabled(True)
         self.zproj_max_button.setEnabled(True)
         self.zproj_mean_button.setEnabled(True)
             
-        # enable contrast & brightness when an image is loaded
+        # Enable contrast & brightness when an image is loaded
         self.cnb_button.setEnabled(True)
             
         # Enable stimulus ROI button if experiment data contains stimulus locations
-        try:
-            stim_rois = self._get_stim_rois_from_experiment()
-            has_stim_data = len(stim_rois) > 0
-            print(f"DEBUG: Found {len(stim_rois)} stimulus ROIs")
-            if hasattr(self.window, '_exp_data') and self.window._exp_data:
-                print(f"DEBUG: Experiment data attributes: {[attr for attr in dir(self.window._exp_data) if not attr.startswith('_')]}")
-            self.stimulation_area_button.setEnabled(has_stim_data)
-            # Ensure the button remains checkable when enabled
-            if has_stim_data:
-                self.stimulation_area_button.setCheckable(True)
-        except Exception as e:
-            print(f"DEBUG: Exception in stimulus detection: {e}")
-            self.stimulation_area_button.setEnabled(False)
+        self._configure_stimulus_button(data['metadata'])
+        
+        # Check if image dimensions changed and resize if needed
+        self._check_and_resize_for_image_change(tif, previous_img_wh)
             
         # Update trace if there's an active ROI to reflect new data
         try:
@@ -944,6 +476,63 @@ class AnalysisWidget(QWidget):
                 self._update_trace_from_roi()
         except Exception:
             pass
+
+    def _on_image_updated(self):
+        """Handle when the ImageViewWidget emits imageUpdated signal.
+        
+        This method is called whenever a new image is displayed in the ImageViewWidget.
+        It updates any image-dependent components like the ROI tool.
+        """
+        try:
+            # Get the current pixmap from the image view
+            current_pixmap = self.reg_tif_label.pixmap()
+            if current_pixmap is not None and hasattr(self, 'roi_tool'):
+                # Update the ROI tool with the new pixmap
+                from PyQt6.QtCore import QRect
+                self.roi_tool.set_pixmap(current_pixmap)
+                self.roi_tool.set_draw_rect(QRect(0, 0, current_pixmap.width(), current_pixmap.height()))
+                
+                # Update image size if we have the window's image dimensions
+                if hasattr(self.window, '_last_img_wh') and self.window._last_img_wh:
+                    self.roi_tool.set_image_size(self.window._last_img_wh[0], self.window._last_img_wh[1])
+                
+                # Update saved ROIs so they display persistently
+                if hasattr(self.window, '_saved_rois'):
+                    self.roi_tool.set_saved_rois(self.window._saved_rois)
+                
+                # Update stimulus ROIs if they should be shown
+                try:
+                    if hasattr(self, 'stimulation_area_button') and self.stimulation_area_button.isChecked():
+                        self.toggle_stim_rois()
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"DEBUG: Error in _on_image_updated: {e}")
+
+    def _configure_stimulus_button(self, metadata):
+        """Configure the stimulus ROI button based on experiment metadata."""
+        try:
+            has_stim_data = False
+            if metadata:
+                # Check for stimulus data in various formats
+                if hasattr(metadata, 'stimulated_roi_location'):
+                    stim_data = getattr(metadata, 'stimulated_roi_location', None)
+                    has_stim_data = stim_data is not None and len(stim_data) > 0
+                elif isinstance(metadata, dict) and 'stimulated_roi_location' in metadata:
+                    stim_data = metadata['stimulated_roi_location']
+                    has_stim_data = stim_data is not None and len(stim_data) > 0
+                
+                print(f"DEBUG: Stimulus data detected: {has_stim_data}")
+                if metadata and hasattr(metadata, '__dict__'):
+                    print(f"DEBUG: Experiment data attributes: {[attr for attr in dir(metadata) if not attr.startswith('_')]}")
+                    
+            self.stimulation_area_button.setEnabled(has_stim_data)
+            # Ensure the button remains checkable when enabled
+            if has_stim_data:
+                self.stimulation_area_button.setCheckable(True)
+        except Exception as e:
+            print(f"DEBUG: Exception in stimulus detection: {e}")
+            self.stimulation_area_button.setEnabled(False)
 
     def update_tif_frame(self, *args):
         """Render the current tif frame (or z-projection) into the label and update ROI tool."""
@@ -1143,10 +732,6 @@ class AnalysisWidget(QWidget):
                     pass
                 self._update_trace_vline()
 
-    def _on_roi_changed(self, xyxy):
-        """Live preview; you can skip computing anything heavy here."""
-        pass
-
     def _on_roi_finalized(self, xyxy):
         """xyxy is (x0, y0, x1, y1) in IMAGE coordinates."""
         print(f"DEBUG: ROI finalized with xyxy={xyxy}")
@@ -1182,446 +767,9 @@ class AnalysisWidget(QWidget):
 
     def _on_roi_selected_by_click(self, roi_index):
         """Handle ROI selection by right-clicking on the image."""
-        try:
-            # Select the corresponding item in the ROI list widget
-            if 0 <= roi_index < self.roi_list_widget.count():
-                self.roi_list_widget.setCurrentRow(roi_index)
-                print(f"Auto-selected ROI {roi_index + 1} by right-click")
-        except Exception as e:
-            print(f"Error selecting ROI by click: {e}")
-
-    # --- Simple ROI save/remove handlers ---
-    def _on_add_roi_clicked(self):
-        """Save the current ROI (if any) into an in-memory list and the list widget."""
-        if getattr(self.window, '_last_roi_xyxy', None) is None:
-            return
-        
-        # Ensure storage exists on window
-        if not hasattr(self.window, '_saved_rois'):
-            self.window._saved_rois = []
-        
-        # Get rotation angle from ROI tool
-        rotation_angle = getattr(self.roi_tool, '_rotation_angle', 0.0)
-        
-        # Check if we're editing an existing ROI
-        if self._editing_roi_index is not None and 0 <= self._editing_roi_index < len(self.window._saved_rois):
-            # Update existing ROI
-            existing_roi = self.window._saved_rois[self._editing_roi_index]
-            existing_roi['xyxy'] = tuple(self.window._last_roi_xyxy)
-            existing_roi['rotation'] = rotation_angle
-            
-            print(f"Updated {existing_roi['name']} with new position/rotation")
-            # Clear editing state
-            self._editing_roi_index = None
-        else:
-            # Create new ROI
-            import random
-            color = (
-                random.randint(100, 255),  # R
-                random.randint(100, 255),  # G
-                random.randint(100, 255),  # B
-                200  # Alpha
-            )
-            
-            name = f"ROI {len(self.window._saved_rois) + 1}"
-            roi_data = {
-                'name': name, 
-                'xyxy': tuple(self.window._last_roi_xyxy),
-                'color': color,
-                'rotation': rotation_angle
-            }
-            self.window._saved_rois.append(roi_data)
-            self.roi_list_widget.addItem(name)
-            print(f"Created new {name}")
-        
-        # Update the ROI tool with all saved ROIs so they display persistently
-        self.roi_tool.set_saved_rois(self.window._saved_rois)
-        # Repaint overlay to show all saved ROIs
-        self.roi_tool._paint_overlay()
-        
-        # Update trace plot for the current ROI
-        try:
-            self._update_trace_from_roi()
-        except Exception as e:
-            print(f"Error updating trace after ROI save: {e}")
-
-    def _on_remove_roi_clicked(self):
-        """Remove selected saved ROI from widget and in-memory store."""
-        item = self.roi_list_widget.currentItem()
-        if not item:
-            return
-        row = self.roi_list_widget.row(item)
-        self.roi_list_widget.takeItem(row)
-        try:
-            if hasattr(self.window, '_saved_rois'):
-                del self.window._saved_rois[row]
-                # Update the ROI tool with remaining saved ROIs
-                self.roi_tool.set_saved_rois(self.window._saved_rois)
-                # Repaint overlay to show updated ROIs
-                self.roi_tool._paint_overlay()
-        except Exception:
-            pass
-
-    def _on_saved_roi_selected(self, current, previous=None):
-        """Restore the selected saved ROI onto the image/roi tool and update trace."""
-        if current is None:
-            self._editing_roi_index = None
-            return
-        row = self.roi_list_widget.row(current)
-        saved = None
-        if hasattr(self.window, '_saved_rois') and 0 <= row < len(self.window._saved_rois):
-            saved = self.window._saved_rois[row]
-        if saved is None:
-            self._editing_roi_index = None
-            return
-        xyxy = saved.get('xyxy')
-        if xyxy is None:
-            self._editing_roi_index = None
-            return
-        
-        # Set editing mode for this ROI
-        self._editing_roi_index = row
-        
-        # Restore and update
-        try:
-            self.window._last_roi_xyxy = tuple(xyxy)
-            rotation_angle = saved.get('rotation', 0.0)
-            self.roi_tool.show_bbox_image_coords(self.window._last_roi_xyxy, rotation_angle)
-            self._update_trace_from_roi()
-            print(f"Selected ROI {row + 1} for editing - press 'r' to update it")
-        except Exception:
-            try:
-                self._update_trace_vline()
-            except Exception:
-                pass
-
-    def _on_load_roi_positions_clicked(self):
-        """Load ROI positions from a JSON file."""
-        # Open file dialog to choose file to import
-        file_dialog = QFileDialog(self)
-        file_dialog.setWindowTitle("Load ROI Positions")
-        file_dialog.setNameFilter("JSON files (*.json)")
-        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        
-        if not file_dialog.exec():
-            return
-            
-        filename = file_dialog.selectedFiles()[0]
-        
-        try:
-            import json
-            with open(filename, 'r') as f:
-                roi_data = json.load(f)
-            
-            # Clear existing ROIs first
-            self.roi_list_widget.clear()
-            if hasattr(self.window, '_saved_rois'):
-                self.window._saved_rois = []
-            else:
-                self.window._saved_rois = []
-            
-            # Load the imported ROIs
-            for roi in roi_data:
-                roi_entry = {
-                    'name': roi['name'],
-                    'xyxy': tuple(roi['xyxy']),
-                    'color': tuple(roi['color']),
-                    'rotation': roi.get('rotation', 0.0)  # Load rotation, default to 0.0 if not present
-                }
-                self.window._saved_rois.append(roi_entry)
-                self.roi_list_widget.addItem(roi['name'])
-            
-            # Update the ROI tool with imported ROIs
-            if hasattr(self.roi_tool, 'set_saved_rois'):
-                self.roi_tool.set_saved_rois(self.window._saved_rois)
-                self.roi_tool._paint_overlay()
-            
-            QMessageBox.information(self, "Load Complete", 
-                                  f"Successfully loaded {len(roi_data)} ROI positions from:\n{filename}")
-                                  
-        except Exception as e:
-            QMessageBox.critical(self, "Load Error", f"Failed to load ROI positions:\n{str(e)}")
-            print(f"Load error: {e}")
-
-    def _on_save_roi_positions_clicked(self):
-        """Save ROI positions to a JSON file."""
-        if not hasattr(self.window, '_saved_rois') or not self.window._saved_rois:
-            QMessageBox.information(self, "No ROIs", "No ROIs to save. Please add some ROIs first.")
-            return
-            
-        # Open file dialog to choose save location
-        file_dialog = QFileDialog(self)
-        file_dialog.setWindowTitle("Save ROI Positions")
-        file_dialog.setNameFilter("JSON files (*.json)")
-        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        file_dialog.setDefaultSuffix("json")
-        
-        if not file_dialog.exec():
-            return
-            
-        filename = file_dialog.selectedFiles()[0]
-        
-        try:
-            # Prepare ROI data for JSON serialization
-            roi_data = []
-            for roi in self.window._saved_rois:
-                roi_data.append({
-                    'name': roi['name'],
-                    'xyxy': list(roi['xyxy']),
-                    'color': list(roi['color']),
-                    'rotation': roi.get('rotation', 0.0)  # Save rotation angle
-                })
-            
-            # Save to file
-            import json
-            with open(filename, 'w') as f:
-                json.dump(roi_data, f, indent=2)
-            
-            QMessageBox.information(self, "Save Complete", 
-                                  f"Successfully saved {len(roi_data)} ROI positions to:\n{filename}")
-                                  
-        except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to save ROI positions:\n{str(e)}")
-            print(f"Save error: {e}")
-
-    def _on_export_roi_clicked(self):
-        """Export all saved ROIs for all timepoints to a tab-separated text file."""
-        if not hasattr(self.window, '_saved_rois') or not self.window._saved_rois:
-            QMessageBox.information(self, "No ROIs", "No ROIs to export. Please add some ROIs first.")
-            return
-            
-        # Check if we have image data
-        if not hasattr(self.window, '_current_tif') or self.window._current_tif is None:
-            QMessageBox.warning(self, "No Image Data", "No image data loaded. Please load a dataset first.")
-            return
-            
-        # Open file dialog to choose save location
-        file_dialog = QFileDialog(self)
-        file_dialog.setWindowTitle("Export ROIs")
-        file_dialog.setNameFilter("Text files (*.txt)")
-        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        file_dialog.setDefaultSuffix("txt")
-        
-        if not file_dialog.exec():
-            return
-            
-        filename = file_dialog.selectedFiles()[0]
-        
-        try:
-            # Get image data dimensions
-            tif = self.window._current_tif
-            tif_chan2 = getattr(self.window, '_current_tif_chan2', None)
-            
-            # Determine number of frames
-            if tif.ndim == 3:
-                nframes = tif.shape[0]
-            else:
-                nframes = 1
-                tif = tif[None, ...]  # Add frame dimension
-                if tif_chan2 is not None:
-                    tif_chan2 = tif_chan2[None, ...]
-            
-            # Get current formula selection
-            formula_index = self.formula_dropdown.currentIndex()
-            
-            # Progress tracking for large datasets
-            total_work = nframes * len(self.window._saved_rois)
-            if total_work > 1000:
-                from PyQt6.QtWidgets import QProgressDialog
-                progress = QProgressDialog("Extracting ROI data...", "Cancel", 0, total_work, self)
-                progress.setWindowModality(Qt.WindowModality.WindowModal)
-                progress.show()
-            else:
-                progress = None
-            
-            # Prepare headers: Frame, then for each ROI: Green_Mean_ROI#, Red_Mean_ROI#, Trace_ROI#
-            headers = ["Frame"]
-            for i, roi in enumerate(self.window._saved_rois):
-                roi_num = i + 1
-                headers.extend([
-                    f"Green_Mean_ROI{roi_num}",
-                    f"Red_Mean_ROI{roi_num}",
-                    f"Trace_ROI{roi_num}"
-                ])
-            
-            # Pre-calculate baseline (Fog) for each ROI using first 10% of frames
-            roi_baselines = {}
-            baseline_count = max(1, int(np.ceil(nframes * 0.10)))
-            
-            for i, roi in enumerate(self.window._saved_rois):
-                xyxy = roi.get('xyxy')
-                if xyxy is None:
-                    roi_baselines[i] = 0
-                    continue
-                
-                x0, y0, x1, y1 = xyxy
-                roi_height = y1 - y0
-                roi_width = x1 - x0
-                
-                if roi_height > 0 and roi_width > 0:
-                    # Extract green values from baseline frames
-                    green_baseline_values = []
-                    try:
-                        cy, cx = (y0 + y1) / 2.0, (x0 + x1) / 2.0
-                        ry, rx = roi_height / 2.0, roi_width / 2.0
-                        y_coords, x_coords = np.ogrid[y0:y1, x0:x1]
-                        mask = ((x_coords - cx) / rx) ** 2 + ((y_coords - cy) / ry) ** 2 <= 1
-                        
-                        for frame_idx in range(baseline_count):
-                            green_frame = tif[frame_idx]
-                            if mask.any():
-                                green_roi_pixels = green_frame[y0:y1, x0:x1][mask]
-                                green_baseline_values.append(np.mean(green_roi_pixels))
-                            else:
-                                green_baseline_values.append(np.mean(green_frame[y0:y1, x0:x1]))
-                        
-                        roi_baselines[i] = float(np.mean(green_baseline_values))
-                    except Exception as e:
-                        print(f"Error calculating baseline for ROI {i+1}: {e}")
-                        roi_baselines[i] = 0
-                else:
-                    roi_baselines[i] = 0
-            
-            # Extract data for all frames and all ROIs
-            export_data = []
-            
-            for frame_idx in range(nframes):
-                if progress is not None:
-                    if progress.wasCanceled():
-                        return
-                    progress.setValue(frame_idx * len(self.window._saved_rois))
-                
-                # Get frames for this timepoint
-                green_frame = tif[frame_idx]
-                red_frame = tif_chan2[frame_idx] if tif_chan2 is not None else None
-                
-                # Start row with frame number (1-indexed)
-                row_data = [str(frame_idx + 1)]
-                
-                # Process each ROI
-                for i, roi in enumerate(self.window._saved_rois):
-                    xyxy = roi.get('xyxy')
-                    if xyxy is None:
-                        row_data.extend(["N/A", "N/A", "N/A"])
-                        continue
-                    
-                    x0, y0, x1, y1 = xyxy
-                    
-                    # Extract green channel mean for this ROI
-                    try:
-                        # Create ellipse mask for this ROI
-                        roi_height = y1 - y0
-                        roi_width = x1 - x0
-                        
-                        if roi_height > 0 and roi_width > 0:
-                            # Create ellipse mask
-                            cy, cx = (y0 + y1) / 2.0, (x0 + x1) / 2.0
-                            ry, rx = roi_height / 2.0, roi_width / 2.0
-                            
-                            y_coords, x_coords = np.ogrid[y0:y1, x0:x1]
-                            mask = ((x_coords - cx) / rx) ** 2 + ((y_coords - cy) / ry) ** 2 <= 1
-                            
-                            # Extract green values
-                            if mask.any():
-                                green_roi_pixels = green_frame[y0:y1, x0:x1][mask]
-                                green_mean = float(np.mean(green_roi_pixels))
-                            else:
-                                # Fallback to rectangular mean
-                                green_mean = float(np.mean(green_frame[y0:y1, x0:x1]))
-                        else:
-                            green_mean = "N/A"
-                    except Exception as e:
-                        print(f"Error extracting green values for ROI {i+1}, frame {frame_idx}: {e}")
-                        green_mean = "N/A"
-                    
-                    # Extract red channel mean for this ROI
-                    try:
-                        if red_frame is not None and roi_height > 0 and roi_width > 0:
-                            if mask.any():
-                                red_roi_pixels = red_frame[y0:y1, x0:x1][mask]
-                                red_mean = float(np.mean(red_roi_pixels))
-                            else:
-                                red_mean = float(np.mean(red_frame[y0:y1, x0:x1]))
-                        else:
-                            red_mean = "N/A"
-                    except Exception as e:
-                        print(f"Error extracting red values for ROI {i+1}, frame {frame_idx}: {e}")
-                        red_mean = "N/A"
-                    
-                    # Calculate trace value based on formula index
-                    try:
-                        Fog = roi_baselines[i]  # Get baseline for this ROI
-                        
-                        if isinstance(green_mean, (int, float)) and isinstance(red_mean, (int, float)):
-                            if formula_index == 0:  # (Fg - Fog) / Fr
-                                if red_mean != 0:
-                                    trace_value = (green_mean - Fog) / red_mean
-                                else:
-                                    trace_value = (green_mean - Fog) / (red_mean + 1e-6)  # Avoid division by zero
-                            elif formula_index == 1:  # (Fg - Fog) / Fog
-                                if Fog != 0:
-                                    trace_value = (green_mean - Fog) / Fog
-                                else:
-                                    trace_value = (green_mean - Fog) / (Fog + 1e-6)  # Avoid division by zero
-                            elif formula_index == 2:  # Fg only
-                                trace_value = green_mean
-                            elif formula_index == 3:  # Fr only
-                                if red_mean != "N/A":
-                                    trace_value = red_mean
-                                else:
-                                    trace_value = 0
-                            else:
-                                trace_value = green_mean - red_mean if red_mean != "N/A" else green_mean
-                        elif isinstance(green_mean, (int, float)):
-                            if formula_index == 0:  # (Fg - Fog) / Fr but no red
-                                trace_value = 0
-                            elif formula_index == 1:  # (Fg - Fog) / Fog
-                                if Fog != 0:
-                                    trace_value = (green_mean - Fog) / Fog
-                                else:
-                                    trace_value = (green_mean - Fog) / (Fog + 1e-6)
-                            elif formula_index == 2:  # Fg only
-                                trace_value = green_mean
-                            elif formula_index == 3:  # Fr only but no red
-                                trace_value = 0
-                            else:
-                                trace_value = green_mean
-                        else:
-                            trace_value = 0
-                    except Exception as e:
-                        print(f"Error calculating trace for ROI {i+1}, frame {frame_idx}: {e}")
-                        trace_value = 0
-                    
-                    # Format values for export
-                    green_str = f"{green_mean:.6f}" if isinstance(green_mean, (int, float)) else str(green_mean)
-                    red_str = f"{red_mean:.6f}" if isinstance(red_mean, (int, float)) else str(red_mean)
-                    trace_str = f"{trace_value:.6f}" if isinstance(trace_value, (int, float)) else str(trace_value)
-                    
-                    row_data.extend([green_str, red_str, trace_str])
-                
-                export_data.append(row_data)
-            
-            if progress is not None:
-                progress.setValue(total_work)
-                progress.close()
-            
-            # Write to file
-            with open(filename, 'w', newline='', encoding='utf-8') as f:
-                # Write header
-                f.write('\t'.join(headers) + '\n')
-                
-                # Write data rows
-                for row in export_data:
-                    f.write('\t'.join(row) + '\n')
-            
-            QMessageBox.information(self, "Export Complete", 
-                                  f"Successfully exported {len(self.window._saved_rois)} ROIs across {nframes} frames to:\n{filename}")
-                                  
-        except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Failed to export ROIs:\n{str(e)}")
-            import traceback
-            print("Full error traceback:")
-            traceback.print_exc()
+        # Delegate to the ROI component
+        if hasattr(self, 'roi_list_component'):
+            self.roi_list_component.auto_select_roi_by_click(roi_index)
 
     def toggle_file_type(self):
         """Toggle between registered TIFF files and raw numpy files."""
@@ -2043,6 +1191,21 @@ class AnalysisWidget(QWidget):
         # Sync the internal flag
         self._show_time_in_seconds = self.trace_plot_widget._show_time_in_seconds
     
+    # --- ROI Component Signal Handlers ---
+    def _on_roi_component_selected(self, roi_data):
+        """Handle when a ROI is selected from the ROI component."""
+        try:
+            self._update_trace_from_roi()
+        except Exception as e:
+            print(f"Error updating trace after ROI selection: {e}")
+    
+    def _on_roi_component_added(self, roi_data):
+        """Handle when a new ROI is added through the ROI component."""
+        try:
+            self._update_trace_from_roi()
+        except Exception as e:
+            print(f"Error updating trace after ROI addition: {e}")
+    
     
     def keyPressEvent(self, event):
         """Handle key press events. Escape clears the current ROI selection and trace plot."""
@@ -2066,10 +1229,14 @@ class AnalysisWidget(QWidget):
             event.accept()
         # Else if R is pressed and an ROI box is drawn
         elif event.key() == Qt.Key.Key_R:
-            self._on_add_roi_clicked()
+            # Delegate to the ROI component
+            if hasattr(self, 'roi_list_component'):
+                self.roi_list_component._on_add_roi_clicked()
             event.accept()
         elif event.key() == Qt.Key.Key_Delete:
-            self._on_remove_roi_clicked()
+            # Delegate to the ROI component
+            if hasattr(self, 'roi_list_component'):
+                self.roi_list_component._on_remove_roi_clicked()
             event.accept()
         elif event.key() == Qt.Key.Key_S and event.modifiers() == Qt.KeyboardModifier.AltModifier:
             self._load_stimulated_rois()
@@ -2079,8 +1246,10 @@ class AnalysisWidget(QWidget):
 
     def _clear_roi_and_trace(self):
         """Clear the current ROI selection and restart the trace plot."""
-        # Clear editing state
+        # Clear editing state in both places for consistency
         self._editing_roi_index = None
+        if hasattr(self, 'roi_list_component'):
+            self.roi_list_component.clear_editing_state()
         
         # Clear the ROI selection
         if hasattr(self, 'roi_tool') and self.roi_tool is not None:
@@ -2229,16 +1398,25 @@ class AnalysisWidget(QWidget):
                 
                 if ed is not None:
                     # Try different possible attribute names for time stamps
+                    # Handle both dictionary and object metadata formats
                     for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                        if hasattr(ed, attr_name):
-                            time_stamps = getattr(ed, attr_name)
-                            break
+                        if isinstance(ed, dict):
+                            if attr_name in ed:
+                                time_stamps = ed[attr_name]
+                                break
+                        else:
+                            if hasattr(ed, attr_name):
+                                time_stamps = getattr(ed, attr_name)
+                                break
                 
                 if time_stamps is not None and current_frame < len(time_stamps):
                     current_x_pos = time_stamps[current_frame] / 1000.0
                 elif ed is not None:
                     # Fallback: estimate time based on frame rate
-                    frame_rate = getattr(ed, 'frame_rate', None)
+                    if isinstance(ed, dict):
+                        frame_rate = ed.get('frame_rate', None)
+                    else:
+                        frame_rate = getattr(ed, 'frame_rate', None)
                     if frame_rate and frame_rate > 0:
                         current_x_pos = current_frame / frame_rate
             except Exception:
@@ -2258,15 +1436,24 @@ class AnalysisWidget(QWidget):
                         time_stamps = None
                         
                         if ed is not None:
+                            # Handle both dictionary and object metadata formats
                             for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                                if hasattr(ed, attr_name):
-                                    time_stamps = getattr(ed, attr_name)
-                                    break
+                                if isinstance(ed, dict):
+                                    if attr_name in ed:
+                                        time_stamps = ed[attr_name]
+                                        break
+                                else:
+                                    if hasattr(ed, attr_name):
+                                        time_stamps = getattr(ed, attr_name)
+                                        break
                         
                         if time_stamps is not None and len(time_stamps) > 0:
                             xmax = max(np.array(time_stamps[:min(nframes, len(time_stamps))]) / 1000.0)
                         elif ed is not None:
-                            frame_rate = getattr(ed, 'frame_rate', None)
+                            if isinstance(ed, dict):
+                                frame_rate = ed.get('frame_rate', None)
+                            else:
+                                frame_rate = getattr(ed, 'frame_rate', None)
                             if frame_rate and frame_rate > 0:
                                 xmax = (nframes - 1) / frame_rate
                             else:
