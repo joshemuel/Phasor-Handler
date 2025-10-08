@@ -1,7 +1,6 @@
-# TODO Quick save of stimulated ROIs
 # TODO Scale Bar
 # TODO Quick view of metadata: scale information pixel n FOV, XYZ position, stim events inf with ROIS (dutycycle format 0.5s20Hz5ms)
-# TODO single trace plotter, timepoint/framenumber selection
+# TODO single trace plotter
 # TODO read Mini2P data
 # TODO Save the display as a PNG
 # TODO BnC
@@ -19,7 +18,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import numpy as np
 import sys
 
-from .components import ImageViewWidget, TraceplotWidget, BnCDialog, CircleRoiTool, RoiListWidget
+from .components import ImageViewWidget, TraceplotWidget, BnCDialog, CircleRoiTool, RoiListWidget, MetadataViewer
 
 
 class AnalysisWidget(QWidget):
@@ -56,7 +55,6 @@ class AnalysisWidget(QWidget):
             self.window._cnb_window = None
 
         # Track which saved ROI is currently being edited (delegated to ROI component)
-        # This is kept for backward compatibility but the actual state is in roi_list_component
         self._editing_roi_index = None
 
         widget = self
@@ -143,6 +141,10 @@ class AnalysisWidget(QWidget):
         self._zproj_mean = False
         self.zproj_mean_button.toggled.connect(lambda checked, m='mean': self._on_zproj_toggled(m, checked))
 
+        self.view_metadata_button = QPushButton("View Metadata")
+        self.view_metadata_button.setEnabled(False)
+        self.view_metadata_button.clicked.connect(self.open_metadata_viewer)
+
         mid_vbox.addWidget(self.file_type_button)
         mid_vbox.addWidget(self.channel_button)
         mid_vbox.addWidget(self.cnb_button)
@@ -151,6 +153,7 @@ class AnalysisWidget(QWidget):
         mid_vbox.addWidget(self.zproj_std_button)
         mid_vbox.addWidget(self.zproj_max_button)
         mid_vbox.addWidget(self.zproj_mean_button)
+        mid_vbox.addWidget(self.view_metadata_button)
         mid_vbox.addStretch(1)
 
         # --- Display panel: reg_tif image display and slider ---
@@ -244,6 +247,7 @@ class AnalysisWidget(QWidget):
             self.window.zproj_std_button = self.zproj_std_button
             self.window.zproj_max_button = self.zproj_max_button
             self.window.zproj_mean_button = self.zproj_mean_button
+            self.window.view_metadata_button = self.view_metadata_button
             self.window.reg_tif_label = self.reg_tif_label
             self.window.image_view = self.image_view  # Expose the new image view widget
             self.window.roi_tool = self.roi_tool
@@ -393,6 +397,9 @@ class AnalysisWidget(QWidget):
         self.window._current_tif_chan2 = data['tif_chan2']
         self.window._exp_data = data['metadata']
 
+        # Update metadata viewer if it's open
+        self._update_metadata_viewer_if_open(reg_dir)
+
         # Update UI state based on loaded data
         self._update_ui_from_experiment_data(data, previous_img_wh)
         
@@ -415,6 +422,7 @@ class AnalysisWidget(QWidget):
         self.zproj_std_button.setEnabled(False)
         self.zproj_max_button.setEnabled(False)
         self.zproj_mean_button.setEnabled(False)
+        self.view_metadata_button.setEnabled(False)
 
     def _update_ui_from_experiment_data(self, data, previous_img_wh):
         """Update UI state based on loaded experiment data."""
@@ -466,6 +474,9 @@ class AnalysisWidget(QWidget):
             
         # Enable stimulus ROI button if experiment data contains stimulus locations
         self._configure_stimulus_button(data['metadata'])
+        
+        # Enable metadata viewer button when experiment data is loaded
+        self.view_metadata_button.setEnabled(True)
         
         # Check if image dimensions changed and resize if needed
         self._check_and_resize_for_image_change(tif, previous_img_wh)
@@ -1169,6 +1180,57 @@ class AnalysisWidget(QWidget):
             self.reg_tif_label.setPixmap(pix.scaled(self.image_view.get_label_size(), Qt.AspectRatioMode.KeepAspectRatio))
         except Exception as e:
             print(f"DEBUG: Error in legacy CNB adjustment: {e}")
+
+    def open_metadata_viewer(self):
+        """Open the metadata viewer dialog with current experiment data."""
+        print("DEBUG: Metadata viewer button clicked!")
+        
+        # Check if we have experiment data
+        exp_data = getattr(self.window, '_exp_data', None)
+        if exp_data is None:
+            print("DEBUG: No experiment data available")
+            QMessageBox.information(self, "No Data", "No experiment metadata available. Please select a directory with experiment data.")
+            return
+        
+        # Get current directory path for display
+        current_item = self.analysis_list_widget.currentItem()
+        directory_path = None
+        if current_item:
+            directory_path = current_item.data(Qt.ItemDataRole.UserRole)
+            if directory_path is None:
+                directory_path = current_item.text()
+        
+        # Create or update the metadata viewer
+        if not hasattr(self.window, '_metadata_viewer') or self.window._metadata_viewer is None:
+            print("DEBUG: Creating new metadata viewer")
+            self.window._metadata_viewer = MetadataViewer(self)
+        
+        # Update with current data
+        print(f"DEBUG: Setting metadata in viewer. Type: {type(exp_data)}")
+        self.window._metadata_viewer.set_metadata(exp_data, directory_path)
+        
+        # Show the dialog
+        if not self.window._metadata_viewer.isVisible():
+            self.window._metadata_viewer.show()
+        else:
+            # Bring to front if already open
+            self.window._metadata_viewer.raise_()
+            self.window._metadata_viewer.activateWindow()
+        
+        print("DEBUG: Metadata viewer should be visible now")
+
+    def _update_metadata_viewer_if_open(self, directory_path):
+        """Update the metadata viewer with new data if it's currently open."""
+        try:
+            if (hasattr(self.window, '_metadata_viewer') and 
+                self.window._metadata_viewer is not None and 
+                self.window._metadata_viewer.isVisible()):
+                
+                print("DEBUG: Updating open metadata viewer with new data")
+                exp_data = getattr(self.window, '_exp_data', None)
+                self.window._metadata_viewer.set_metadata(exp_data, directory_path)
+        except Exception as e:
+            print(f"DEBUG: Error updating metadata viewer: {e}")
 
     def _update_trace_from_roi(self, index=None):
         """Update the trace plot based on current ROI selection - delegated to trace plot widget."""
