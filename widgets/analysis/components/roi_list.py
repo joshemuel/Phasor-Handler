@@ -18,7 +18,7 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
     QPushButton, QGridLayout, QCheckBox, QFileDialog, QMessageBox,
-    QListWidgetItem, QProgressDialog
+    QListWidgetItem, QProgressDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -67,9 +67,10 @@ class RoiListWidget(QWidget):
         self.load_roi_btn = QPushButton("Load ROIs...")
         
         # Set button sizes
-        for btn in [self.add_roi_btn, self.remove_roi_btn, self.export_trace_btn, 
-                   self.save_roi_btn, self.load_roi_btn]:
-            btn.setFixedWidth(110)
+        for btn in [self.add_roi_btn, self.remove_roi_btn,
+                    self.save_roi_btn, self.load_roi_btn,
+                    self.export_trace_btn]:
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         
         # Arrange buttons in grid
         roi_grid_layout.addWidget(self.add_roi_btn, 0, 0)
