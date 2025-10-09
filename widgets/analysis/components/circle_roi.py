@@ -1,6 +1,6 @@
 # TODO: Make it so that ROIs can be removed seamlessly
 
-from PyQt6.QtCore import QObject, pyqtSignal, Qt, QRect, QPoint, QSize, QPointF
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QRect, QPointF
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
 from PyQt6.QtWidgets import QLabel
 from typing import Optional

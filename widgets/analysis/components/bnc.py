@@ -9,13 +9,12 @@ linear brightness/contrast adjustments with multi-threading support.
 import numpy as np
 import threading
 import queue
-import time
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton, 
-    QComboBox, QGroupBox, QGridLayout, QSizePolicy
+    QComboBox, QGroupBox, QGridLayout,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
 

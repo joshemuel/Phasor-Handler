@@ -28,7 +28,7 @@ class MetadataViewer(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Experiment Metadata Viewer")
         self.setModal(False)  # Allow interaction with main window while open
-        self.resize(800, 600)
+        self.resize(400, 500)
         
         self.metadata = None
         self.directory_path = None

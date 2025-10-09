@@ -9,19 +9,14 @@ This component handles all ROI list management including:
 - ROI selection and editing
 """
 
-import os
 import json
-import csv
-import traceback
 import random
 import numpy as np
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
-    QPushButton, QGridLayout, QCheckBox, QFileDialog, QMessageBox,
-    QListWidgetItem, QProgressDialog, QSizePolicy
+    QWidget, QVBoxLayout, QGroupBox, QListWidget, QPushButton, 
+    QGridLayout, QFileDialog, QMessageBox, QProgressDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
 
 
 class RoiListWidget(QWidget):

@@ -1,5 +1,4 @@
 import sys
-import os
 import subprocess
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QFileDialog, QMessageBox, 
@@ -8,7 +7,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFileSystemModel, QIcon
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
-import numpy as np
 
 from widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
 from tools import misc

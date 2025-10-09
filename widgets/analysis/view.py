@@ -1,22 +1,21 @@
-# TODO single trace plotter
+# TODO Implement better ROI drawing
 # TODO read Mini2P data
 # TODO BnC
+# TODO Fix dimensionality bug
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
-    QPushButton, QLabel, QSlider, QLineEdit, QComboBox, QSizePolicy,
-    QFileDialog, QMessageBox, QGridLayout, QCheckBox
+    QPushButton, QSlider, QSizePolicy, QFileDialog, QMessageBox, 
+    QCheckBox
 )
 from PyQt6.QtCore import Qt
 
 import os
 import datetime
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import numpy as np
-import sys
 
-from .components import ImageViewWidget, TraceplotWidget, BnCDialog, CircleRoiTool, RoiListWidget, MetadataViewer
+from .components import ImageViewWidget, TraceplotWidget, CircleRoiTool, RoiListWidget, MetadataViewer
 
 
 class AnalysisWidget(QWidget):

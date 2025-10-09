@@ -85,6 +85,8 @@ class TraceplotWidget(QWidget):
         self.formula_dropdown.currentIndexChanged.connect(self._update_trace_from_roi)
         controls_layout.addWidget(self.formula_dropdown)
 
+        controls_layout.addSpacing(15)
+
         # Time display toggle button
         self.time_display_button = QPushButton("Frames")
         self.time_display_button.setFixedWidth(100)
@@ -96,7 +98,7 @@ class TraceplotWidget(QWidget):
         self.time_display_button.clicked.connect(self._toggle_time_display)
         controls_layout.addWidget(self.time_display_button)
         
-        controls_layout.addStretch(1)  # Push controls to top
+        # controls_layout.addStretch(1)
         
         main_layout.addLayout(controls_layout, 0)  # No stretch for controls
 

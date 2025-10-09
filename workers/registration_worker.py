@@ -3,7 +3,6 @@ import sys
 import glob
 import shutil
 import subprocess
-import tifftools
 from PyQt6.QtCore import QObject, pyqtSignal
 
 
