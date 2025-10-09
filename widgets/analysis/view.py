@@ -1,5 +1,3 @@
-# TODO Scale Bar
-# TODO Quick view of metadata: scale information pixel n FOV, XYZ position, stim events inf with ROIS (dutycycle format 0.5s20Hz5ms)
 # TODO single trace plotter
 # TODO read Mini2P data
 # TODO Save the display as a PNG
@@ -466,7 +464,7 @@ class AnalysisWidget(QWidget):
         # Configure channel and composite buttons
         has_channel2 = tif_chan2 is not None
         if has_channel2:
-            self.channel_button.setEnabled(True)
+            self.channel_button.setEnabled(False)
             self.composite_button.setEnabled(True)
         else:
             self.channel_button.setEnabled(False)

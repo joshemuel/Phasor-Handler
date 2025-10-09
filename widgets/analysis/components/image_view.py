@@ -555,7 +555,7 @@ class ImageViewWidget(QWidget):
             
             # Position scale bar at bottom right
             margin = 20
-            bar_height = 4
+            bar_height = 10
             text_height = 15
             
             # Ensure scale bar fits within image bounds
@@ -575,12 +575,12 @@ class ImageViewWidget(QWidget):
             bar_x = max(min_margin, bar_x)
             bar_y = max(min_margin, bar_y)
             
-            # No background - transparent scale bar
-            # (Removed background rectangle for fully transparent appearance)
-            
             # Draw scale bar
             painter.setPen(QPen(QColor(Qt.GlobalColor.white), 2))  # White, 2px wide
-            painter.drawRect(int(bar_x), int(bar_y), int(display_scale_bar_pixels), bar_height)
+            painter.drawLine(int(bar_x),              # Start X
+                 int(bar_y + bar_height), # Start Y (bottom of where rect would be)
+                 int(bar_x + display_scale_bar_pixels), # End X
+                 int(bar_y + bar_height))
             
             # Draw text label
             font = QFont()
