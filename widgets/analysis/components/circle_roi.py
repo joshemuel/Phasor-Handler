@@ -18,6 +18,7 @@ class CircleRoiTool(QObject):
     roiChanged = pyqtSignal(tuple)   # (x0, y0, x1, y1) in image coords (during drag)
     roiFinalized = pyqtSignal(tuple) # (x0, y0, x1, y1) in image coords (on release)
     roiSelected = pyqtSignal(int)    # index of ROI selected by right-click
+    roiDrawingStarted = pyqtSignal() # emitted when user starts drawing a new ROI
 
     def __init__(self, label: QLabel, parent=None):
         super().__init__(parent)
@@ -60,6 +61,8 @@ class CircleRoiTool(QObject):
         self._bbox_origin = None       # (left, top, w, h) float tuple
         self._rotation_anchor = None   # QPointF for rotation center
         self._rotation_origin = None   # original angle before rotation starts
+        # whether to show the small mode text in the overlay (can be toggled by view)
+        self._show_mode_text = True
 
     # --- Public API you call from app.py when the image view updates ---
 
@@ -246,6 +249,9 @@ class CircleRoiTool(QObject):
 
         if et == event.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.LeftButton and self._in_draw_rect(event.position()):
+                # Emit signal that ROI drawing has started
+                self.roiDrawingStarted.emit()
+                
                 # start drawing: left button defines first corner
                 self._mode = 'draw'
                 self._dragging = True
@@ -319,6 +325,18 @@ class CircleRoiTool(QObject):
                             self._rotation_anchor = p
                             self._rotation_origin = self._rotation_angle
                         return True
+                
+                # If we reach here, user right-clicked on empty space
+                # Clear any editing state and selection
+                if hasattr(self.parent(), 'roi_list_component'):
+                    self.parent().roi_list_component.clear_editing_state()
+                    # Also clear selection in the ROI list widget
+                    roi_list_widget = self.parent().roi_list_component.get_list_widget()
+                    if roi_list_widget:
+                        roi_list_widget.clearSelection()
+                        roi_list_widget.setCurrentItem(None)
+                print("Cleared ROI editing state - clicked on empty space")
+                return True
 
         elif et == event.Type.MouseMove:
             if not self._dragging:
@@ -614,7 +632,7 @@ class CircleRoiTool(QObject):
                 pass
 
         # Draw mode indicator in the top-left corner
-        if self._bbox is not None:
+        if self._bbox is not None and getattr(self, '_show_mode_text', True):
             mode_text = f"Mode: {self._interaction_mode.title()} (Y to toggle)"
             painter.setPen(QPen(QColor(255, 255, 255, 200)))
             font = QFont()
@@ -703,6 +721,16 @@ class CircleRoiTool(QObject):
                 self._saved_rois = list(saved_rois)
         except Exception:
             self._saved_rois = []
+
+    def set_show_mode_text(self, show: bool):
+        """Externally control whether the small mode text is shown in the overlay."""
+        try:
+            self._show_mode_text = bool(show)
+        except Exception:
+            self._show_mode_text = True
+        # repaint overlay to apply the change
+        if self._base_pixmap is not None:
+            self._paint_overlay()
 
     def set_stim_rois(self, stim_rois):
         """Provide a list of stimulus ROI dicts (id, xyxy, name) to be drawn persistently."""

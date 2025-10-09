@@ -124,12 +124,28 @@ class RoiListWidget(QWidget):
     
     def _on_add_roi_clicked(self):
         """Save the current ROI (if any) into an in-memory list and the list widget."""
+        print(f"DEBUG: _on_add_roi_clicked called - editing_index: {self._editing_roi_index}")
+        
         if getattr(self.main_window, '_last_roi_xyxy', None) is None:
+            print("DEBUG: No _last_roi_xyxy found, returning")
             return
+        
+        print(f"DEBUG: Current _last_roi_xyxy: {self.main_window._last_roi_xyxy}")
         
         # Ensure storage exists on window
         if not hasattr(self.main_window, '_saved_rois'):
             self.main_window._saved_rois = []
+        
+        # Check if this ROI already exists (same coordinates), but only if we're NOT editing an existing ROI
+        if self._editing_roi_index is None:  # Only check for duplicates when creating new ROIs
+            current_xyxy = tuple(self.main_window._last_roi_xyxy)
+            for existing_roi in self.main_window._saved_rois:
+                existing_xyxy = existing_roi.get('xyxy')
+                if existing_xyxy and tuple(existing_xyxy) == current_xyxy:
+                    print(f"DEBUG: ROI with coordinates {current_xyxy} already exists - skipping")
+                    return
+        else:
+            print(f"DEBUG: In editing mode for ROI {self._editing_roi_index} - allowing coordinate updates")
         
         # Get rotation angle from ROI tool
         roi_tool = getattr(self.main_window, 'roi_tool', None)
@@ -142,13 +158,41 @@ class RoiListWidget(QWidget):
             existing_roi['xyxy'] = tuple(self.main_window._last_roi_xyxy)
             existing_roi['rotation'] = rotation_angle
             
-            print(f"Updated {existing_roi['name']} with new position/rotation")
+            print(f"DEBUG: Updated {existing_roi['name']} with new position/rotation")
+            print(f"DEBUG: New xyxy: {existing_roi['xyxy']}, New rotation: {existing_roi['rotation']}")
             # Emit update signal
             self.roiUpdated.emit(self._editing_roi_index, existing_roi)
-            # Clear editing state
-            self._editing_roi_index = None
+            # After updating an ROI, clear editing state and deselect the item so it's no longer "active"
+            try:
+                # Clear internal editing index
+                self._editing_roi_index = None
+                # Deselect the list widget selection
+                lw = self.get_list_widget()
+                if lw is not None:
+                    lw.clearSelection()
+                    lw.setCurrentItem(None)
+                # Update ROI tool display
+                if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
+                    self.main_window.roi_tool.set_saved_rois(self.main_window._saved_rois)
+                    self.main_window.roi_tool._paint_overlay()
+                print("DEBUG: Cleared editing state and deselected ROI after update")
+            except Exception:
+                pass
         else:
-            # Create new ROI
+            # Create new ROI - calculate next available ROI number
+            existing_numbers = []
+            for roi in self.main_window._saved_rois:
+                roi_name = roi.get('name', '')
+                if roi_name.startswith('ROI '):
+                    try:
+                        number = int(roi_name.split('ROI ')[1])
+                        existing_numbers.append(number)
+                    except (IndexError, ValueError):
+                        pass
+            
+            next_num = max(existing_numbers) + 1 if existing_numbers else 1
+            name = f"ROI {next_num}"
+            
             color = (
                 random.randint(100, 255),  # R
                 random.randint(100, 255),  # G
@@ -156,7 +200,6 @@ class RoiListWidget(QWidget):
                 200  # Alpha
             )
             
-            name = f"ROI {len(self.main_window._saved_rois) + 1}"
             roi_data = {
                 'name': name, 
                 'xyxy': tuple(self.main_window._last_roi_xyxy),
@@ -169,6 +212,9 @@ class RoiListWidget(QWidget):
             
             # Emit added signal
             self.roiAdded.emit(roi_data)
+        
+        # Always clear editing state after any ROI operation
+        self._editing_roi_index = None
         
         # Update the ROI tool with all saved ROIs so they display persistently
         if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
@@ -216,6 +262,7 @@ class RoiListWidget(QWidget):
         
         # Set editing mode for this ROI
         self._editing_roi_index = row
+        print(f"DEBUG: Set editing_roi_index to {row} for ROI: {saved.get('name', 'Unknown')}")
         
         # Restore and update
         try:
@@ -225,6 +272,7 @@ class RoiListWidget(QWidget):
                 self.main_window.roi_tool.show_bbox_image_coords(xyxy, rotation)
                 self.main_window.roi_tool._rotation_angle = rotation
             print(f"Selected ROI {row + 1} for editing - press 'r' to update it")
+            print(f"DEBUG: Restored xyxy: {xyxy}, rotation: {rotation}")
             
             # Emit selection signal
             self.roiSelected.emit(saved)

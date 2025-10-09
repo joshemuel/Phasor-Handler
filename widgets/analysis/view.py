@@ -1,6 +1,5 @@
 # TODO single trace plotter
 # TODO read Mini2P data
-# TODO Save the display as a PNG
 # TODO BnC
 
 from PyQt6.QtWidgets import (
@@ -11,6 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 import os
+import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import numpy as np
@@ -54,6 +54,9 @@ class AnalysisWidget(QWidget):
 
         # Track which saved ROI is currently being edited (delegated to ROI component)
         self._editing_roi_index = None
+        
+        # Initialize text visibility state (for CTRL+Y toggle)
+        self._text_visible = True
 
         widget = self
         main_vbox = QVBoxLayout()
@@ -93,7 +96,6 @@ class AnalysisWidget(QWidget):
         mid_vbox = QVBoxLayout()
         self.channel_button = QPushButton("Show Channel 2")
         self.channel_button.setEnabled(False)
-        # Use the widget's toggle implementation
         self.channel_button.clicked.connect(self.toggle_channel)
 
         self.file_type_button = QPushButton("Show Raw")
@@ -115,7 +117,6 @@ class AnalysisWidget(QWidget):
         self.composite_button.setEnabled(False)
         self.composite_button.setCheckable(True)
         self.composite_button.setChecked(True)
-        # When composite toggles, refresh the image and sync channel button state
         self.composite_button.clicked.connect(lambda _checked: (self.update_tif_frame(), self._sync_channel_button_state()))
 
         self.zproj_std_button = QPushButton("SD Z projection")
@@ -143,7 +144,10 @@ class AnalysisWidget(QWidget):
         self.view_metadata_button.setEnabled(False)
         self.view_metadata_button.clicked.connect(self.open_metadata_viewer)
 
-        # Create a checkbox for view scale bar
+        self.save_img = QPushButton("Save Current View")
+        self.save_img.setEnabled(False)
+        self.save_img.clicked.connect(self._save_current_view)
+
         self.scale_bar_checkbox = QCheckBox("Show Scale Bar")
         self.scale_bar_checkbox.setChecked(False)
         self.scale_bar_checkbox.setEnabled(False)  # Initially disabled
@@ -159,6 +163,7 @@ class AnalysisWidget(QWidget):
         mid_vbox.addWidget(self.zproj_mean_button)
         mid_vbox.addWidget(self.view_metadata_button)
         mid_vbox.addStretch(0.5)
+        mid_vbox.addWidget(self.save_img)
         mid_vbox.addWidget(self.scale_bar_checkbox)
 
         # --- Display panel: reg_tif image display and slider ---
@@ -177,6 +182,7 @@ class AnalysisWidget(QWidget):
         self.roi_tool = CircleRoiTool(self.reg_tif_label)
         self.roi_tool.roiFinalized.connect(self._on_roi_finalized)
         self.roi_tool.roiSelected.connect(self._on_roi_selected_by_click)
+        self.roi_tool.roiDrawingStarted.connect(self._on_roi_drawing_started)
         print("DEBUG: ROI tool signals connected")
 
         self.tif_slider = QSlider(Qt.Orientation.Horizontal)
@@ -411,6 +417,8 @@ class AnalysisWidget(QWidget):
         # Display the first frame
         self.update_tif_frame()
 
+        self.save_img.setEnabled(True)
+
     def _clear_experiment_state(self):
         """Clear all experiment-related state."""
         self.image_view.clear_experiment()
@@ -429,6 +437,7 @@ class AnalysisWidget(QWidget):
         self.zproj_mean_button.setEnabled(False)
         self.view_metadata_button.setEnabled(False)
         self.scale_bar_checkbox.setEnabled(False)
+        self.save_img.setEnabled(False)
 
     def _update_ui_from_experiment_data(self, data, previous_img_wh):
         """Update UI state based on loaded experiment data."""
@@ -758,6 +767,7 @@ class AnalysisWidget(QWidget):
         """xyxy is (x0, y0, x1, y1) in IMAGE coordinates."""
         print(f"DEBUG: ROI finalized with xyxy={xyxy}")
         self.window._last_roi_xyxy = xyxy
+        print(f"DEBUG: Set self.window._last_roi_xyxy = {xyxy}")
         # Only clear editing state when drawing a completely new ROI (not when modifying existing one)
         # The editing state should be preserved if we're modifying a saved ROI
         # Store rotation angle persistently
@@ -792,6 +802,27 @@ class AnalysisWidget(QWidget):
         # Delegate to the ROI component
         if hasattr(self, 'roi_list_component'):
             self.roi_list_component.auto_select_roi_by_click(roi_index)
+
+    def _on_roi_drawing_started(self):
+        """Handle when user starts drawing a new ROI."""
+        # Only clear editing state if we're not currently editing an existing ROI
+        # Check if there's an active editing session
+        current_editing_index = None
+        if hasattr(self, 'roi_list_component'):
+            current_editing_index = self.roi_list_component.get_editing_roi_index()
+        
+        if current_editing_index is not None:
+            print("DEBUG: ROI drawing started but we're editing an existing ROI - preserving editing state")
+            return
+            
+        # Clear editing state to ensure new ROI creation instead of updating existing ROI
+        if hasattr(self, 'roi_list_component'):
+            self.roi_list_component.clear_editing_state()
+            # Also clear any selection in the ROI list widget
+            roi_list_widget = self.roi_list_component.get_list_widget()
+            if roi_list_widget:
+                roi_list_widget.clearSelection()
+            print("DEBUG: Cleared editing state and ROI selection when starting new ROI drawing")
 
     def toggle_file_type(self):
         """Toggle between registered TIFF files and raw numpy files."""
@@ -832,6 +863,33 @@ class AnalysisWidget(QWidget):
         """Toggle the display of scale bar on the image."""
         # Update the current frame to show/hide scale bar
         self.update_tif_frame()
+
+    def _toggle_text_visibility(self):
+        """Toggle visibility of all text labels and overlays using H hotkey."""
+        try:
+            # Initialize text visibility state if it doesn't exist
+            if not hasattr(self, '_text_visible'):
+                self._text_visible = True
+            
+            # Toggle the state
+            self._text_visible = not self._text_visible
+            
+            # Apply to ROI tool if it exists
+            if hasattr(self, 'roi_tool') and self.roi_tool is not None:
+                
+                # Toggle mode text visibility
+                if hasattr(self.roi_tool, 'set_show_mode_text'):
+                    self.roi_tool.set_show_mode_text(self._text_visible)
+                # Force redraw of overlay to apply changes
+                if hasattr(self.roi_tool, '_paint_overlay'):
+                    self.roi_tool._paint_overlay()
+            
+            # Print debug message
+            state_msg = "visible" if self._text_visible else "hidden"
+            print(f"DEBUG: Text/labels toggled to {state_msg}")
+            
+        except Exception as e:
+            print(f"ERROR in _toggle_text_visibility: {e}")
 
     def _on_hide_rois_toggled(self, state):
         """Hide or show saved/stim ROIs when checkbox toggled."""
@@ -1268,6 +1326,86 @@ class AnalysisWidget(QWidget):
         self.trace_plot_widget._toggle_time_display()
         # Sync the internal flag
         self._show_time_in_seconds = self.trace_plot_widget._show_time_in_seconds
+
+    def _save_current_view(self):
+        """Save the current displayed image with ROIs as a PNG or JPG file."""
+        try:
+            # Get the current pixmap from the image label (this includes all overlays)
+            current_pixmap = self.reg_tif_label.pixmap()
+            if current_pixmap is None:
+                QMessageBox.warning(self, "No Image", "No image is currently displayed to save.")
+                return
+            
+            # Generate default filename with timestamp and directory info
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Get current directory name for filename
+            current_item = self.analysis_list_widget.currentItem()
+            dir_name = "image"
+            if current_item:
+                full_path = current_item.data(Qt.ItemDataRole.UserRole)
+                if full_path:
+                    dir_name = os.path.basename(full_path)
+                else:
+                    dir_name = current_item.text()
+                # Clean up directory name for filename
+                dir_name = "".join(c for c in dir_name if c.isalnum() or c in ('-', '_')).rstrip()
+            
+            # Get current frame info
+            frame_idx = int(self.tif_slider.value()) if hasattr(self, 'tif_slider') else 0
+            
+            # Generate default filename (without extension)
+            default_filename = f"{dir_name}_frame{frame_idx:04d}_{timestamp}"
+            
+            # Open save file dialog with format selection
+            file_path, selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "Save Current View",
+                default_filename,
+                "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)"
+            )
+            
+            if not file_path:
+                return  # User cancelled
+            
+            # Determine format from selected filter or file extension
+            format_type = "PNG"  # Default
+            if selected_filter.startswith("JPEG") or file_path.lower().endswith(('.jpg', '.jpeg')):
+                format_type = "JPEG"
+            elif selected_filter.startswith("PNG") or file_path.lower().endswith('.png'):
+                format_type = "PNG"
+            
+            # Ensure proper file extension
+            if format_type == "JPEG" and not file_path.lower().endswith(('.jpg', '.jpeg')):
+                file_path += '.jpg'
+            elif format_type == "PNG" and not file_path.lower().endswith('.png'):
+                file_path += '.png'
+            
+            # Save the pixmap in the selected format
+            success = current_pixmap.save(file_path, format_type)
+            
+            if success:
+                QMessageBox.information(
+                    self, 
+                    "Image Saved", 
+                    f"Image saved successfully to:\n{file_path}"
+                )
+                print(f"DEBUG: Image saved to {file_path} as {format_type}")
+            else:
+                QMessageBox.critical(
+                    self, 
+                    "Save Failed", 
+                    f"Failed to save image to:\n{file_path}"
+                )
+                print(f"DEBUG: Failed to save image to {file_path}")
+                
+        except Exception as e:
+            print(f"DEBUG: Error saving current view: {e}")
+            QMessageBox.critical(
+                self, 
+                "Save Error", 
+                f"An error occurred while saving the image:\n{str(e)}"
+            )
     
     # --- ROI Component Signal Handlers ---
     def _on_roi_component_selected(self, roi_data):
@@ -1307,9 +1445,29 @@ class AnalysisWidget(QWidget):
             event.accept()
         # Else if R is pressed and an ROI box is drawn
         elif event.key() == Qt.Key.Key_R:
-            # Delegate to the ROI component
-            if hasattr(self, 'roi_list_component'):
+            # Only add ROI if there's actually a current ROI drawn and user is not currently drawing
+            roi_tool_dragging = (hasattr(self, 'roi_tool') and 
+                                getattr(self.roi_tool, '_dragging', False))
+            
+            has_roi_component = hasattr(self, 'roi_list_component')
+            has_last_roi = hasattr(self.window, '_last_roi_xyxy')  # Fixed: check window object
+            last_roi_value = getattr(self.window, '_last_roi_xyxy', None)  # Fixed: get from window object
+            
+            print(f"DEBUG: R key pressed - has_roi_component: {has_roi_component}, has_last_roi: {has_last_roi}, last_roi_value: {last_roi_value}, dragging: {roi_tool_dragging}")
+            
+            if (has_roi_component and 
+                has_last_roi and 
+                last_roi_value is not None and
+                not roi_tool_dragging):
+                print("DEBUG: R key pressed - adding current ROI")
                 self.roi_list_component._on_add_roi_clicked()
+            else:
+                if roi_tool_dragging:
+                    print("DEBUG: R key pressed but user is currently drawing ROI - ignoring")
+                elif not has_last_roi or last_roi_value is None:
+                    print("DEBUG: R key pressed but no _last_roi_xyxy available")
+                else:
+                    print("DEBUG: R key pressed but conditions not met")
             event.accept()
         elif event.key() == Qt.Key.Key_Delete:
             # Delegate to the ROI component
@@ -1318,6 +1476,9 @@ class AnalysisWidget(QWidget):
             event.accept()
         elif event.key() == Qt.Key.Key_S and event.modifiers() == Qt.KeyboardModifier.AltModifier:
             self._load_stimulated_rois()
+            event.accept()
+        elif event.key() == Qt.Key.Key_H:
+            self._toggle_text_visibility()
             event.accept()
         else:
             super().keyPressEvent(event)
@@ -1345,6 +1506,7 @@ class AnalysisWidget(QWidget):
         
         # Clear the stored ROI coordinates and rotation
         if hasattr(self.window, '_last_roi_xyxy'):
+            print(f"DEBUG: Clearing _last_roi_xyxy (was: {self.window._last_roi_xyxy})")
             self.window._last_roi_xyxy = None
         if hasattr(self.window, '_last_roi_rotation'):
             self.window._last_roi_rotation = 0.0
