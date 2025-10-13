@@ -51,10 +51,10 @@ This project provides an `environment.yml` for Windows. The environment is large
 ### 2) Get the code
 - Clone the repo and change it into
   ```powershell
-  git clone https://github.com/<your-user>/<your-repo>.git
-  cd <your-repo>
+  git clone https://github.com/joshemuel/Phasor-Handler.git
+  cd Phasor-Handler
 - Alternatively, you can download the entire project as a zip file, unzip it, then open that directory in **Miniconda**
-  cd <your-repo>
+  cd Phasor-Handler
 
 ### 3) Create the environment
 - Using mamba:
