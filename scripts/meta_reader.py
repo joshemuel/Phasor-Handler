@@ -20,8 +20,8 @@ folder_path = args.folder_path
 def open_overwrite(path, *args, **kwargs):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.unlink(missing_ok=True)         # delete if exists (no error if missing)
-    return open(path, *args, **kwargs)   # 'w' will create/overwrite
+    path.unlink(missing_ok=True)
+    return open(path, *args, **kwargs) 
 
 def load_classes(yaml_path):
     classes = {}
@@ -228,7 +228,6 @@ def extract_roi_info(events):
 data = {}
 for filename in os.listdir(folder_path):
     if filename.endswith(".yaml"):
-        # if filename is "ImageRecord.yaml", "AnnotationRecord.yaml", or "ElapsedTimes.yaml", read it as a whole
         if filename in ["ImageRecord.yaml", "ChannelRecord.yaml"]:
             with open(os.path.join(folder_path, filename), 'r') as file:
                 try:
@@ -250,6 +249,14 @@ for filename in os.listdir(folder_path):
                 except yaml.YAMLError as e:
                     print(f"Error reading {filename}: {e}")
 
+day = data["ImageRecord.yaml"]["CImageRecord70"]["mDay"]
+month = data["ImageRecord.yaml"]["CImageRecord70"]["mMonth"]
+year = data["ImageRecord.yaml"]["CImageRecord70"]["mYear"]
+hour = data["ImageRecord.yaml"]["CImageRecord70"]["mHour"]
+minute = data["ImageRecord.yaml"]["CImageRecord70"]["mMinute"]
+second = data["ImageRecord.yaml"]["CImageRecord70"]["mSecond"]
+
+
 variables = {
     "device_name": parse_stimulation_xml(data["AnnotationRecord.yaml"]["stimulation_events"][0]["stimulation_data"]["mXML"])["device_name"] if data["AnnotationRecord.yaml"]["stimulation_events"] else np.nan,
     "n_frames": data["ElapsedTimes.yaml"]["theElapsedTimes"][0],
@@ -264,6 +271,12 @@ variables = {
     "X_start_position": data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mXStartPosition"],
     "Y_start_position": data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mYStartPosition"],
     "Z_start_position": data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mZStartPosition"],
+    "day": day,
+    "month": month,
+    "year": year,
+    "hour": hour,
+    "minute": minute,
+    "second": second,
     "stimulation_events": len([x["timepoint_index"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]]),
     "repetitions": [
     int(re.search(r"(\d+)\s+repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"]).group(1))

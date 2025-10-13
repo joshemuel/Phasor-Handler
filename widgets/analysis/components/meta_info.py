@@ -231,18 +231,30 @@ class MetadataViewer(QDialog):
         
         # Timing Information
         row = 0
-        time_keys = ['time_stamps', 'elapsed_times', 'acquisition_start_time']
+        time_keys = ['time_stamps', 'elapsed_times', 'acquisition_start_time', 'year', 'hour']
         for key in time_keys:
             if key in self.metadata:
                 value = self.metadata[key]
-                if isinstance(value, list) and len(value) > 0:
+                if key == "year":
+                    year = self.metadata["year"]
+                    month = self.metadata["month"]
+                    day = self.metadata["day"]
+                    display_value = f"{day:02d}/{month:02d}/{year:04d}"
+                    key = "Date (DDMMYYYY)"
+                elif key == "hour":
+                    hour = self.metadata["hour"]
+                    minute = self.metadata["minute"]
+                    second = self.metadata["second"]
+                    display_value = f"{hour:02d}:{minute:02d}:{second:02d}"
+                    key = "Local Time"
+                elif isinstance(value, list) and len(value) > 0:
                     interval = (sum([value[i+1] - value[i] for i in range(len(value)-1)])/(len(value)-1))/1000
                     start_display = "0" if value[0] == 0 else f"{value[0]/1000:.3f}"
                     display_value = f"From {start_display} to {value[-1]/1000:.3f} seconds with an average interval of {interval:.3f} seconds"
                 else:
                     display_value = str(value)
                 self.add_info_row(self.timing_layout, row, key.replace('_', ' ').title(), 
-                                display_value)
+                                display_value) if key != "Date (DDMMYYYY)" else self.add_info_row(self.timing_layout, row, key, display_value)
                 row += 1
         
         # Stimulation Information
@@ -287,6 +299,7 @@ class MetadataViewer(QDialog):
                 elif key == "FOV_size": 
                     key = "FOV Size (µm)"
                     value = value[:-7]
+
                 self.add_info_row(self.image_layout, row, key.replace('_', ' '), 
                                 str(value))
                 row += 1
