@@ -1,12 +1,12 @@
 # TODO Implement better ROI drawing
 # TODO read Mini2P data
-# TODO BnC
+# TODO Compartmentalize the image functionalities better
 # TODO Fix dimensionality bug
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
     QPushButton, QSlider, QSizePolicy, QFileDialog, QMessageBox, 
-    QCheckBox
+    QCheckBox, QLabel, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt
 
@@ -56,6 +56,12 @@ class AnalysisWidget(QWidget):
         
         # Initialize text visibility state (for CTRL+Y toggle)
         self._text_visible = True
+        
+        # Initialize percentile values for persistence
+        self._ch1_percentile_min = 1.0
+        self._ch1_percentile_max = 99.5
+        self._ch2_percentile_min = 1.0
+        self._ch2_percentile_max = 99.5
 
         widget = self
         main_vbox = QVBoxLayout()
@@ -92,7 +98,9 @@ class AnalysisWidget(QWidget):
         left_vbox.addWidget(dir_group)
 
         # --- Mid HBox: Buttons to change the view of the image ---
-        mid_vbox = QVBoxLayout()
+        midl_vbox = QVBoxLayout()
+        midr_vbox = QVBoxLayout()
+
         self.channel_button = QPushButton("Show Channel 2")
         self.channel_button.setEnabled(False)
         self.channel_button.clicked.connect(self.toggle_channel)
@@ -118,27 +126,6 @@ class AnalysisWidget(QWidget):
         self.composite_button.setChecked(True)
         self.composite_button.clicked.connect(lambda _checked: (self.update_tif_frame(), self._sync_channel_button_state()))
 
-        self.zproj_std_button = QPushButton("SD Z projection")
-        self.zproj_std_button.setEnabled(False)
-        self.zproj_std_button.setCheckable(True)
-        self.zproj_std_button.setChecked(False)
-        self._zproj_std = False
-        self.zproj_std_button.toggled.connect(lambda checked, m='std': self._on_zproj_toggled(m, checked))
-
-        self.zproj_max_button = QPushButton("Max Z projection")
-        self.zproj_max_button.setEnabled(False)
-        self.zproj_max_button.setCheckable(True)
-        self.zproj_max_button.setChecked(False)
-        self._zproj_max = False
-        self.zproj_max_button.toggled.connect(lambda checked, m='max': self._on_zproj_toggled(m, checked))
-
-        self.zproj_mean_button = QPushButton("Mean Z projection")
-        self.zproj_mean_button.setEnabled(False)
-        self.zproj_mean_button.setCheckable(True)
-        self.zproj_mean_button.setChecked(False)
-        self._zproj_mean = False
-        self.zproj_mean_button.toggled.connect(lambda checked, m='mean': self._on_zproj_toggled(m, checked))
-
         self.view_metadata_button = QPushButton("View Metadata")
         self.view_metadata_button.setEnabled(False)
         self.view_metadata_button.clicked.connect(self.open_metadata_viewer)
@@ -152,18 +139,122 @@ class AnalysisWidget(QWidget):
         self.scale_bar_checkbox.setEnabled(False)  # Initially disabled
         self.scale_bar_checkbox.stateChanged.connect(self.toggle_scale_bar)
 
-        mid_vbox.addWidget(self.file_type_button)
-        mid_vbox.addWidget(self.channel_button)
-        mid_vbox.addWidget(self.cnb_button)
-        mid_vbox.addWidget(self.stimulation_area_button)
-        mid_vbox.addWidget(self.composite_button)
-        mid_vbox.addWidget(self.zproj_std_button)
-        mid_vbox.addWidget(self.zproj_max_button)
-        mid_vbox.addWidget(self.zproj_mean_button)
-        mid_vbox.addWidget(self.view_metadata_button)
-        mid_vbox.addStretch(0.5)
-        mid_vbox.addWidget(self.save_img)
-        mid_vbox.addWidget(self.scale_bar_checkbox)
+        # --- Z-Projections Group ---
+        zproj_group = QGroupBox("Z-Projections")
+        zproj_layout = QVBoxLayout()
+        
+        self.zproj_std_button = QPushButton("Standard Deviation")
+        self.zproj_std_button.setEnabled(False)
+        self.zproj_std_button.setCheckable(True)
+        self.zproj_std_button.setChecked(False)
+        self._zproj_std = False
+        self.zproj_std_button.toggled.connect(lambda checked, m='std': self._on_zproj_toggled(m, checked))
+
+        self.zproj_max_button = QPushButton("Max")
+        self.zproj_max_button.setEnabled(False)
+        self.zproj_max_button.setCheckable(True)
+        self.zproj_max_button.setChecked(False)
+        self._zproj_max = False
+        self.zproj_max_button.toggled.connect(lambda checked, m='max': self._on_zproj_toggled(m, checked))
+
+        self.zproj_mean_button = QPushButton("Mean")
+        self.zproj_mean_button.setEnabled(False)
+        self.zproj_mean_button.setCheckable(True)
+        self.zproj_mean_button.setChecked(False)
+        self._zproj_mean = False
+        self.zproj_mean_button.toggled.connect(lambda checked, m='mean': self._on_zproj_toggled(m, checked))
+
+        zproj_layout.addWidget(self.zproj_std_button)
+        zproj_layout.addWidget(self.zproj_max_button)
+        zproj_layout.addWidget(self.zproj_mean_button)
+        zproj_group.setLayout(zproj_layout)
+
+        # --- BnC Group ---
+        bnc_group = QGroupBox("Brightness and Contrast")
+        bnc_layout = QVBoxLayout()
+        bnc_labels = QHBoxLayout()
+
+        # Channel selection buttons (mutually exclusive)
+        channel_buttons_layout = QHBoxLayout()
+        
+        self.bnc_channel1_button = QPushButton("Channel 1")
+        self.bnc_channel1_button.setCheckable(True)
+        self.bnc_channel1_button.setChecked(True)  # Default to Channel 1
+        self.bnc_channel1_button.clicked.connect(lambda: self._on_bnc_channel_selected(1))
+        self.bnc_channel1_button.setMaximumWidth(80)
+        
+        self.bnc_channel2_button = QPushButton("Channel 2")
+        self.bnc_channel2_button.setCheckable(True)
+        self.bnc_channel2_button.setChecked(False)
+        self.bnc_channel2_button.setEnabled(False)  # Initially disabled
+        self.bnc_channel2_button.clicked.connect(lambda: self._on_bnc_channel_selected(2))
+        self.bnc_channel2_button.setMaximumWidth(80)
+        
+        channel_buttons_layout.addWidget(self.bnc_channel1_button)
+        channel_buttons_layout.addWidget(self.bnc_channel2_button)
+
+        # Controls layout (minimal spinboxes + auto button)
+        controls_layout = QHBoxLayout()
+        
+        # Minimal spinboxes
+        self.bnc_spinbox_min = QDoubleSpinBox()
+        self.bnc_spinbox_min.setRange(0.0, 100.0)
+        self.bnc_spinbox_min.setSingleStep(0.5)
+        self.bnc_spinbox_min.setValue(0.5)
+        self.bnc_spinbox_min.setMaximumWidth(80)  # Minimal width
+        self.bnc_spinbox_min.setToolTip("Lower percentile cutoff")
+        self.bnc_spinbox_min.valueChanged.connect(self._on_bnc_percentile_changed)
+
+        self.bnc_spinbox_max = QDoubleSpinBox()
+        self.bnc_spinbox_max.setRange(0.0, 100.0)
+        self.bnc_spinbox_max.setSingleStep(0.5)
+        self.bnc_spinbox_max.setValue(99.5)
+        self.bnc_spinbox_max.setMaximumWidth(80)  # Minimal width
+        self.bnc_spinbox_max.setToolTip("Upper percentile cutoff")
+        self.bnc_spinbox_max.valueChanged.connect(self._on_bnc_percentile_changed)
+
+        # Reset and Normalize buttons
+        buttons_layout = QHBoxLayout()
+        
+        self.bnc_reset_button = QPushButton("Reset")
+        self.bnc_reset_button.setMaximumWidth(80)
+        self.bnc_reset_button.setToolTip("Reset to default range (0-100)")
+        self.bnc_reset_button.clicked.connect(self._on_bnc_reset)
+        
+        buttons_layout.addWidget(self.bnc_reset_button)
+        buttons_layout.addStretch()
+
+        bnc_labels.addWidget(QLabel("Min (pth):"))
+        bnc_labels.addWidget(QLabel("Max (pth):"))
+
+        controls_layout.addWidget(self.bnc_spinbox_min)
+        controls_layout.addWidget(self.bnc_spinbox_max)
+        controls_layout.addStretch()  # Push everything to the left
+
+        bnc_layout.addLayout(channel_buttons_layout)
+        bnc_layout.addLayout(bnc_labels)
+        bnc_layout.addLayout(controls_layout)
+        bnc_layout.addLayout(buttons_layout)
+        bnc_group.setLayout(bnc_layout)
+        
+        # Track which channel is currently selected for BnC
+        self._bnc_active_channel = 1
+
+        midl_vbox.addWidget(self.file_type_button)
+        midl_vbox.addWidget(self.channel_button)
+        midl_vbox.addWidget(self.stimulation_area_button)
+        midl_vbox.addWidget(self.composite_button)
+        midl_vbox.addWidget(self.view_metadata_button)
+
+        midr_vbox.addWidget(zproj_group)
+        midr_vbox.addWidget(bnc_group)
+        
+
+        midl_vbox.addStretch(0.5)
+        midr_vbox.addStretch(0.5)
+        
+        midl_vbox.addWidget(self.save_img)
+        midl_vbox.addWidget(self.scale_bar_checkbox)
 
         # --- Display panel: reg_tif image display and slider ---
         display_panel = QVBoxLayout()
@@ -231,14 +322,17 @@ class AnalysisWidget(QWidget):
         self.roi_list_widget = self.roi_list_component.get_list_widget()
 
         # --- Assemble layouts ---
-        main_hbox.addLayout(left_vbox, 1)  # Allow directory list to expand
-        main_hbox.addLayout(mid_vbox, 0)
-        main_hbox.addLayout(display_panel, 2)  # Allow image display to expand with higher priority
-        main_hbox.addWidget(self.roi_list_component, 1)  # Allow ROI list to expand too
+        main_hbox.addLayout(left_vbox, 1) 
+        main_hbox.addLayout(midl_vbox, 0)
+        main_hbox.addLayout(display_panel, 2)
+        main_hbox.addLayout(midr_vbox, 0)
+        main_hbox.addWidget(self.roi_list_component, 0)
 
 
-        main_vbox.addLayout(main_hbox, 2)  # Image area gets highest priority
-        main_vbox.addLayout(bottom_panel, 1)  # Graph gets second priority
+        main_vbox.addLayout(main_hbox)
+        main_vbox.setStretch(0, 75)
+        main_vbox.addLayout(bottom_panel) 
+        main_vbox.setStretch(1, 25)
         widget.setLayout(main_vbox)
 
         # Store loaded tiff data placeholders on window for compatibility
@@ -327,6 +421,86 @@ class AnalysisWidget(QWidget):
                     # ROI is out of bounds for this image, clear it
                     self.window._last_roi_xyxy = None
 
+    def _on_bnc_channel_selected(self, channel):
+        """Handle BnC channel selection (mutually exclusive buttons)."""
+        self._bnc_active_channel = channel
+        
+        # Ensure only one button is checked at a time
+        if channel == 1:
+            self.bnc_channel1_button.setChecked(True)
+            self.bnc_channel2_button.setChecked(False)
+            # Load Channel 1 percentiles
+            self.bnc_spinbox_min.setValue(self._ch1_percentile_min)
+            self.bnc_spinbox_max.setValue(self._ch1_percentile_max)
+        else:
+            self.bnc_channel1_button.setChecked(False)
+            self.bnc_channel2_button.setChecked(True)
+            # Load Channel 2 percentiles
+            self.bnc_spinbox_min.setValue(self._ch2_percentile_min)
+            self.bnc_spinbox_max.setValue(self._ch2_percentile_max)
+        
+        # Update the image display
+        if getattr(self.window, '_current_tif', None) is not None:
+            self.update_tif_frame()
+
+    def _on_bnc_percentile_changed(self):
+        """Handle changes to the BnC percentile spinboxes and update the image."""
+        # Only update if we have image data loaded
+        if getattr(self.window, '_current_tif', None) is not None:
+            # Get current values
+            min_val = self.bnc_spinbox_min.value()
+            max_val = self.bnc_spinbox_max.value()
+            
+            # Ensure min < max
+            if min_val >= max_val:
+                self.bnc_spinbox_max.setValue(min_val + 0.1)
+                max_val = min_val + 0.1
+            
+            # Store values for the active channel
+            if self._bnc_active_channel == 1:
+                self._ch1_percentile_min = min_val
+                self._ch1_percentile_max = max_val
+            else:
+                self._ch2_percentile_min = min_val
+                self._ch2_percentile_max = max_val
+            
+            # Update the current frame display
+            self.update_tif_frame()
+
+    def _on_bnc_reset(self):
+        """Reset BnC values to default range (0-99.65)."""
+        self.bnc_spinbox_min.setValue(0.5)
+        self.bnc_spinbox_max.setValue(99.5)
+        
+    def _on_percentile_changed(self):
+        """Handle changes to the percentile spinboxes and update the image."""
+        # Only update if we have image data loaded
+        if getattr(self.window, '_current_tif', None) is not None:
+            # Validate that min < max for each channel
+            ch1_min = self.channel_1_spinbox_min.value()
+            ch1_max = self.channel_1_spinbox_max.value()
+            ch2_min = self.channel_2_spinbox_min.value()
+            ch2_max = self.channel_2_spinbox_max.value()
+            
+            # Ensure min < max for channel 1
+            if ch1_min >= ch1_max:
+                self.channel_1_spinbox_max.setValue(ch1_min + 0.1)
+                ch1_max = ch1_min + 0.1
+            
+            # Ensure min < max for channel 2
+            if ch2_min >= ch2_max:
+                self.channel_2_spinbox_max.setValue(ch2_min + 0.1)
+                ch2_max = ch2_min + 0.1
+            
+            # Store values persistently
+            self._ch1_percentile_min = ch1_min
+            self._ch1_percentile_max = ch1_max
+            self._ch2_percentile_min = ch2_min
+            self._ch2_percentile_max = ch2_max
+            
+            # Update the current frame display
+            self.update_tif_frame()
+
     def _on_zproj_toggled(self, mode, checked):
         """Handle toggling of the z-projection buttons so only one projection
         mode is active at a time. mode is one of 'std', 'max', 'mean'.
@@ -376,8 +550,37 @@ class AnalysisWidget(QWidget):
                 self.update_tif_frame()
             except Exception:
                 pass
+            
+            # Enable/disable BnC controls based on Z projection state
+            self._update_bnc_controls_for_zproj()
         except Exception:
             pass
+
+    def _update_bnc_controls_for_zproj(self):
+        """Enable/disable BnC controls based on Z projection state."""
+        # Check if any Z projection is active
+        z_projection_active = (getattr(self, '_zproj_std', False) or 
+                              getattr(self, '_zproj_max', False) or 
+                              getattr(self, '_zproj_mean', False))
+        
+        # Enable/disable BnC controls - they should be disabled when Z projections are active
+        controls_enabled = not z_projection_active and getattr(self.window, '_current_tif', None) is not None
+        
+        try:
+            self.bnc_channel1_button.setEnabled(controls_enabled)
+            # Only enable channel 2 if it exists and Z projections are not active
+            has_channel2 = getattr(self.window, '_current_tif_chan2', None) is not None
+            self.bnc_channel2_button.setEnabled(controls_enabled and has_channel2)
+            self.bnc_spinbox_min.setEnabled(controls_enabled)
+            self.bnc_spinbox_max.setEnabled(controls_enabled)
+            self.bnc_reset_button.setEnabled(controls_enabled)
+            
+            if z_projection_active:
+                print("DEBUG: Z projection active - BnC controls disabled")
+            else:
+                print("DEBUG: No Z projection - BnC controls enabled")
+        except Exception as e:
+            print(f"DEBUG: Error updating BnC controls: {e}")
 
     def display_reg_tif_image(self, current, previous=None):
         """Load registered tif(s) for the selected directory and initialize slider/view."""
@@ -437,6 +640,13 @@ class AnalysisWidget(QWidget):
         self.view_metadata_button.setEnabled(False)
         self.scale_bar_checkbox.setEnabled(False)
         self.save_img.setEnabled(False)
+        
+        # Disable BnC controls when no data is loaded
+        self.bnc_channel1_button.setEnabled(False)
+        self.bnc_channel2_button.setEnabled(False)
+        self.bnc_spinbox_min.setEnabled(False)
+        self.bnc_spinbox_max.setEnabled(False)
+        self.bnc_reset_button.setEnabled(False)
 
     def _update_ui_from_experiment_data(self, data, previous_img_wh):
         """Update UI state based on loaded experiment data."""
@@ -474,9 +684,14 @@ class AnalysisWidget(QWidget):
         if has_channel2:
             self.channel_button.setEnabled(False)
             self.composite_button.setEnabled(True)
+            # Ensure composite mode is active for dual-channel data by default
+            if not self.composite_button.isChecked():
+                self.composite_button.setChecked(True)
+            print(f"DEBUG: Dual-channel data detected, composite enabled and checked: {self.composite_button.isChecked()}")
         else:
             self.channel_button.setEnabled(False)
             self.composite_button.setEnabled(False)
+            print("DEBUG: Single-channel data, composite disabled")
             
         # Enable z-projection buttons when an image is loaded
         self.zproj_std_button.setEnabled(True)
@@ -485,6 +700,24 @@ class AnalysisWidget(QWidget):
             
         # Enable contrast & brightness when an image is loaded
         self.cnb_button.setEnabled(True)
+        
+        # Enable BnC controls when an image is loaded
+        self.bnc_channel1_button.setEnabled(True)
+        self.bnc_spinbox_min.setEnabled(True)
+        self.bnc_spinbox_max.setEnabled(True)
+        self.bnc_reset_button.setEnabled(True)
+        
+        # Enable/disable Channel 2 button based on availability
+        if has_channel2:
+            self.bnc_channel2_button.setEnabled(True)
+        else:
+            self.bnc_channel2_button.setEnabled(False)
+            # Ensure Channel 1 is selected if Channel 2 becomes unavailable
+            if self._bnc_active_channel == 2:
+                self._on_bnc_channel_selected(1)
+        
+        # Update BnC controls based on current Z projection state
+        self._update_bnc_controls_for_zproj()
             
         # Enable stimulus ROI button if experiment data contains stimulus locations
         self._configure_stimulus_button(data['metadata'])
@@ -494,6 +727,14 @@ class AnalysisWidget(QWidget):
         
         # Enable scale bar checkbox when experiment data is loaded
         self.scale_bar_checkbox.setEnabled(True)
+        
+        # Restore BnC values for the currently selected channel
+        if self._bnc_active_channel == 1:
+            self.bnc_spinbox_min.setValue(self._ch1_percentile_min)
+            self.bnc_spinbox_max.setValue(self._ch1_percentile_max)
+        else:
+            self.bnc_spinbox_min.setValue(self._ch2_percentile_min)
+            self.bnc_spinbox_max.setValue(self._ch2_percentile_max)
         
         # Check if image dimensions changed and resize if needed
         self._check_and_resize_for_image_change(tif, previous_img_wh)
@@ -651,35 +892,82 @@ class AnalysisWidget(QWidget):
         # Normalize base channel (green) using robust percentile clipping
         g = img.astype(np.float32)
 
-        # Use lower and upper percentiles to avoid single-pixel outliers
-        g_low = np.percentile(g, 5)
-        g_high = np.percentile(g, 99.5)
-        # Ensure sensible ordering
-        if g_high <= g_low:
-            g_high = float(g.max())
+        # Check if any Z projection is active
+        z_projection_active = (getattr(self, '_zproj_std', False) or 
+                              getattr(self, '_zproj_max', False) or 
+                              getattr(self, '_zproj_mean', False))
 
-        g_clipped = np.clip(g, g_low, g_high)
+        if z_projection_active:
+            # For Z projections, use raw values without percentile clipping
+            print("DEBUG: Z projection active - using raw values without thresholding")
+            g_view = g / float(g.max()) if g.max() > 0 else g  # Simple normalization to [0,1]
+        else:
+            # Use BnC spinbox values for percentile clipping
+            if self._bnc_active_channel == 1:
+                g_low_percentile = self.bnc_spinbox_min.value()
+                g_high_percentile = self.bnc_spinbox_max.value()
+            else:
+                g_low_percentile = self._ch1_percentile_min
+                g_high_percentile = self._ch1_percentile_max
+            
+            g_low = np.percentile(g, g_low_percentile)
+            g_high = np.percentile(g, g_high_percentile)
+            # Ensure sensible ordering
+            if g_high <= g_low:
+                g_high = float(g.max())
 
-        # Now, normalize the clipped data to [0,1]
-        g_min_view = float(np.min(g_clipped))
-        g_ptp_view = float(np.ptp(g_clipped))
-        g_view = (g_clipped - g_min_view) / (g_ptp_view if g_ptp_view > 0 else 1.0)
+            g_clipped = np.clip(g, g_low, g_high)
+
+            # Always normalize the clipped data to [0,1] (default behavior)
+            g_min_view = float(np.min(g_clipped))
+            g_ptp_view = float(np.ptp(g_clipped))
+            g_view = (g_clipped - g_min_view) / (g_ptp_view if g_ptp_view > 0 else 1.0)
 
         if img_chan2 is not None and self.composite_button.isChecked():
+            print("DEBUG: Applying composite mode")
             self.zproj_std_button.setEnabled(True)
             self.zproj_max_button.setEnabled(True)
             self.zproj_mean_button.setEnabled(True)
 
             r = img_chan2.astype(np.float32)
-            # Use robust percentile clipping for red channel as well
-            r_low = np.percentile(r, 5)
-            r_high = np.percentile(r, 99.5)
-            if r_high <= r_low:
-                r_high = float(r.max())
-            r_clipped = np.clip(r, r_low, r_high)
-            r_min_view = float(np.min(r_clipped))
-            r_ptp_view = float(np.ptp(r_clipped))
-            r_view = (r_clipped - r_min_view) / (r_ptp_view if r_ptp_view > 0 else 1.0)
+            
+            if z_projection_active:
+                # For Z projections in composite mode, use raw values without percentile clipping
+                print("DEBUG: Z projection active - using raw values for composite channels")
+                r_view = r / float(r.max()) if r.max() > 0 else r  # Simple normalization to [0,1]
+                # Also use raw values for green channel in composite mode
+                g_view = g / float(g.max()) if g.max() > 0 else g
+            else:
+                # Use BnC spinbox values for percentile clipping for red channel
+                if self._bnc_active_channel == 2:
+                    r_low_percentile = self.bnc_spinbox_min.value()
+                    r_high_percentile = self.bnc_spinbox_max.value()
+                else:
+                    r_low_percentile = self._ch2_percentile_min
+                    r_high_percentile = self._ch2_percentile_max
+                
+                r_low = np.percentile(r, r_low_percentile)
+                r_high = np.percentile(r, r_high_percentile)
+                if r_high <= r_low:
+                    r_high = float(r.max())
+                
+                # Apply user-specified percentile clipping for red channel
+                r_clipped = np.clip(r, r_low, r_high)
+                
+                # Always normalize the clipped data to [0,1] (default behavior)
+                r_min_view = float(np.min(r_clipped))
+                r_ptp_view = float(np.ptp(r_clipped))
+                r_view = (r_clipped - r_min_view) / (r_ptp_view if r_ptp_view > 0 else 1.0)
+
+                # Set any values above the user-specified high percentile to maximum intensity (1.0)
+                r_threshold = np.percentile(r_view, r_high_percentile)
+                print(f"DEBUG: Red channel - {r_high_percentile}%ile threshold: {r_threshold:.4f}")
+                r_view = np.where(r_view > r_threshold, 1.0, r_view)
+                
+                # Apply the same logic to green channel
+                g_threshold = np.percentile(g_view, g_high_percentile)
+                print(f"DEBUG: Green channel - {g_high_percentile}%ile threshold: {g_threshold:.4f}")
+                g_view = np.where(g_view > g_threshold, 1.0, g_view)
 
             h, w = g.shape
             composite_rgba = np.zeros((h, w, 4), dtype=np.uint8)
@@ -692,12 +980,21 @@ class AnalysisWidget(QWidget):
             if img_chan2 is not None and active_ch == 2:
                 r = img_chan2.astype(np.float32)
                 
-                # Apply the same robust contrast enhancement as composite path
-                r_low = np.percentile(r, 5)
-                r_high = np.percentile(r, 99.5)
+                # Apply contrast enhancement using BnC spinbox values
+                if self._bnc_active_channel == 2:
+                    r_low_percentile = self.bnc_spinbox_min.value()
+                    r_high_percentile = self.bnc_spinbox_max.value()
+                else:
+                    r_low_percentile = self._ch2_percentile_min
+                    r_high_percentile = self._ch2_percentile_max
+                
+                r_low = np.percentile(r, r_low_percentile)
+                r_high = np.percentile(r, r_high_percentile)
                 if r_high <= r_low:
                     r_high = float(r.max())
                 r_clipped = np.clip(r, r_low, r_high)
+                
+                # Always normalize the clipped data to [0,1] (default behavior)
                 r_min_view = float(np.min(r_clipped))
                 r_ptp_view = float(np.ptp(r_clipped))
                 r_view = (r_clipped - r_min_view) / (r_ptp_view if r_ptp_view > 0 else 1.0)

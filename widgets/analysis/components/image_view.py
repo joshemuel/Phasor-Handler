@@ -40,7 +40,7 @@ class ImageViewWidget(QWidget):
         # Create the main image display label
         self.reg_tif_label = QLabel("Select a directory to view registered images.")
         self.reg_tif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.reg_tif_label.setMinimumSize(700, 629)
+        self.reg_tif_label.setMinimumSize(700, 700)
         self.reg_tif_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         layout.addWidget(self.reg_tif_label, 1)  # Give stretch factor of 1 to make it greedy

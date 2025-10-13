@@ -98,12 +98,10 @@ class TraceplotWidget(QWidget):
         self.time_display_button.clicked.connect(self._toggle_time_display)
         controls_layout.addWidget(self.time_display_button)
         
-        # controls_layout.addStretch(1)
-        
-        main_layout.addLayout(controls_layout, 0)  # No stretch for controls
+        main_layout.addLayout(controls_layout, 0) 
 
         # Right side: Figure and canvas
-        self.trace_fig, self.trace_ax = plt.subplots(figsize=(8, 4), dpi=100)
+        self.trace_fig, self.trace_ax = plt.subplots(figsize=(12, 6), dpi=100)
         self.trace_ax.set_xticks([])
         self.trace_ax.set_yticks([])
         self.trace_ax.set_xlabel("")
@@ -339,7 +337,8 @@ class TraceplotWidget(QWidget):
         else:
             self.trace_ax.plot(metric, label="(F green - Fo green)/F red", color='white')
         
-        self.trace_ax.set_xlabel(x_label, color='white')
+        self.trace_ax.set_xlabel(x_label, color='white', labelpad=2)
+        self.trace_ax.tick_params(axis='x', pad=1, labelsize=9)
         self._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=20, linewidth=2)
         
         # Store frame vline reference on main window for compatibility
