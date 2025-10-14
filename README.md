@@ -51,7 +51,7 @@ This project provides an `environment.yml` for Windows. The environment is large
 - Clone the repo and change it into
   ```powershell
   git clone https://github.com/joshemuel/Phasor-Handler.git
-  cd Phasor-Handler
+  chdir Phasor-Handler
 - Alternatively, you can download the entire project as a zip file, unzip it, then open that directory in **Miniconda**
   cd Phasor-Handler
 
@@ -72,5 +72,5 @@ This project provides an `environment.yml` for Windows. The environment is large
 
 ### 1) Go to your local repo and pull the latest code from the branch you use
 ```powershell
-cd Phasor-Handler
+chdir Phasor-Handler
 git pull --ff-only
