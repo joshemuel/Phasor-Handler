@@ -1,3 +1,4 @@
+# TODO Adjust baseline percentage
 # TODO Implement better ROI drawing
 # TODO read Mini2P data
 # TODO Compartmentalize the image functionalities better

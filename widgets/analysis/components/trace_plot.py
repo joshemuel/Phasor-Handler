@@ -245,27 +245,38 @@ class TraceplotWidget(QWidget):
 
         self.trace_ax.cla()
 
-        # Compute metric: (F_green - Fo_green) / F_red
-        # If red channel missing, avoid division by zero by plotting NaNs
+        # Compute metric depending on available channels and selected formula
+        # If red channel missing, switch to (Fg - Fo)/Fo (index 1) and disable other choices
         if sig2 is None:
-            metric = np.full_like(sig1, np.nan)
-            self.formula_dropdown.setEnabled(False)
+            # Single-channel data: use (Fg - Fo)/Fo
+            try:
+                # set dropdown to index 1 (Fg - Fo / Fo) but do not allow changing it
+                if self.formula_dropdown.count() > 1:
+                    # If index argument was provided override, respect it, otherwise set selection
+                    if index is None:
+                        self.formula_dropdown.setCurrentIndex(1)
+                self.formula_dropdown.setEnabled(False)
+            except Exception:
+                pass
+
+            # Safe denom: avoid division by zero
+            denom_val = Fog if (Fog is not None and Fog != 0) else 1e-6
+            metric = (sig1 - Fog) / denom_val
         else:
+            # Two-channel data: enable formula selection
             self.formula_dropdown.setEnabled(True)
             formula_index = self.formula_dropdown.currentIndex() if index is None else index
             if formula_index == 0:
                 denom = sig2.copy().astype(np.float32)
-                denom[denom == 0] = 0 + 1e-6
+                denom[denom == 0] = 1e-6
                 metric = (sig1 - Fog) / denom
             elif formula_index == 1:
-                metric = (sig1 - Fog) / Fog
+                denom_val = Fog if (Fog is not None and Fog != 0) else 1e-6
+                metric = (sig1 - Fog) / denom_val
             elif formula_index == 2:
                 metric = sig1
             elif formula_index == 3:
-                if sig2 is None:
-                    metric = np.full_like(sig1, 0)
-                else:
-                    metric = sig2
+                metric = sig2 if sig2 is not None else np.full_like(sig1, 0)
 
         current_frame = 0
         if hasattr(self.main_window, 'tif_slider'):
