@@ -249,63 +249,95 @@ for filename in os.listdir(folder_path):
                 except yaml.YAMLError as e:
                     print(f"Error reading {filename}: {e}")
 
-day = data["ImageRecord.yaml"]["CImageRecord70"]["mDay"]
-month = data["ImageRecord.yaml"]["CImageRecord70"]["mMonth"]
-year = data["ImageRecord.yaml"]["CImageRecord70"]["mYear"]
-hour = data["ImageRecord.yaml"]["CImageRecord70"]["mHour"]
-minute = data["ImageRecord.yaml"]["CImageRecord70"]["mMinute"]
-second = data["ImageRecord.yaml"]["CImageRecord70"]["mSecond"]
+# Extract date/time values with error handling
+try:
+    day = data["ImageRecord.yaml"]["CImageRecord70"]["mDay"]
+except (KeyError, TypeError):
+    day = "NA"
 
+try:
+    month = data["ImageRecord.yaml"]["CImageRecord70"]["mMonth"]
+except (KeyError, TypeError):
+    month = "NA"
+
+try:
+    year = data["ImageRecord.yaml"]["CImageRecord70"]["mYear"]
+except (KeyError, TypeError):
+    year = "NA"
+
+try:
+    hour = data["ImageRecord.yaml"]["CImageRecord70"]["mHour"]
+except (KeyError, TypeError):
+    hour = "NA"
+
+try:
+    minute = data["ImageRecord.yaml"]["CImageRecord70"]["mMinute"]
+except (KeyError, TypeError):
+    minute = "NA"
+
+try:
+    second = data["ImageRecord.yaml"]["CImageRecord70"]["mSecond"]
+except (KeyError, TypeError):
+    second = "NA"
+
+# Helper function to safely extract values
+def safe_extract(func, default="NA"):
+    """Safely execute a function and return default if it fails."""
+    try:
+        result = func()
+        return result if result is not None else default
+    except (KeyError, TypeError, IndexError, AttributeError, ValueError):
+        return default
 
 variables = {
-    "device_name": parse_stimulation_xml(data["AnnotationRecord.yaml"]["stimulation_events"][0]["stimulation_data"]["mXML"])["device_name"] if data["AnnotationRecord.yaml"]["stimulation_events"] else np.nan,
-    "n_frames": data["ElapsedTimes.yaml"]["theElapsedTimes"][0],
-    "pixel_size": data["ImageRecord.yaml"]["CLensDef70"]["mMicronPerPixel"],
-    "height": data["ImageRecord.yaml"]["CImageRecord70"]["mHeight"],
-    "width": data["ImageRecord.yaml"]["CImageRecord70"]["mWidth"],
-    "FOV_size": f"{data['ImageRecord.yaml']['CLensDef70']['mMicronPerPixel'] * data['ImageRecord.yaml']['CImageRecord70']['mHeight']} x {data['ImageRecord.yaml']['CLensDef70']['mMicronPerPixel'] * data['ImageRecord.yaml']['CImageRecord70']['mWidth']} microns",
-    "Elapsed_time_offset": data["ImageRecord.yaml"]["CImageRecord70"]["mElapsedTimeOffset"], # Give a warning if not 0
-    "green_channel": data["ImageRecord.yaml"]["CMainViewRecord70"]["mGreenChannel"],
-    "red_channel": data["ImageRecord.yaml"]["CMainViewRecord70"]["mRedChannel"],
-    "blue_channel": data["ImageRecord.yaml"]["CMainViewRecord70"]["mBlueChannel"],
-    "X_start_position": data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mXStartPosition"],
-    "Y_start_position": data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mYStartPosition"],
-    "Z_start_position": data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mZStartPosition"],
+    "device_name": safe_extract(lambda: parse_stimulation_xml(data["AnnotationRecord.yaml"]["stimulation_events"][0]["stimulation_data"]["mXML"])["device_name"] if data["AnnotationRecord.yaml"]["stimulation_events"] else "NA"),
+    "n_frames": safe_extract(lambda: data["ElapsedTimes.yaml"]["theElapsedTimes"][0]),
+    "pixel_size": safe_extract(lambda: data["ImageRecord.yaml"]["CLensDef70"]["mMicronPerPixel"]),
+    "height": safe_extract(lambda: data["ImageRecord.yaml"]["CImageRecord70"]["mHeight"]),
+    "width": safe_extract(lambda: data["ImageRecord.yaml"]["CImageRecord70"]["mWidth"]),
+    "FOV_size": safe_extract(lambda: f"{data['ImageRecord.yaml']['CLensDef70']['mMicronPerPixel'] * data['ImageRecord.yaml']['CImageRecord70']['mHeight']} x {data['ImageRecord.yaml']['CLensDef70']['mMicronPerPixel'] * data['ImageRecord.yaml']['CImageRecord70']['mWidth']} microns"),
+    "Elapsed_time_offset": safe_extract(lambda: data["ImageRecord.yaml"]["CImageRecord70"]["mElapsedTimeOffset"]),
+    "green_channel": safe_extract(lambda: data["ImageRecord.yaml"]["CMainViewRecord70"]["mGreenChannel"]),
+    "red_channel": safe_extract(lambda: data["ImageRecord.yaml"]["CMainViewRecord70"]["mRedChannel"]),
+    "blue_channel": safe_extract(lambda: data["ImageRecord.yaml"]["CMainViewRecord70"]["mBlueChannel"]),
+    "X_start_position": safe_extract(lambda: data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mXStartPosition"]),
+    "Y_start_position": safe_extract(lambda: data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mYStartPosition"]),
+    "Z_start_position": safe_extract(lambda: data["ChannelRecord.yaml"]["CExposureRecord70"][0]["mZStartPosition"]),
     "day": day,
     "month": month,
     "year": year,
     "hour": hour,
     "minute": minute,
     "second": second,
-    "stimulation_events": len([x["timepoint_index"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]]),
-    "repetitions": [
-    int(re.search(r"(\d+)\s+repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"]).group(1))
-    for event in data["AnnotationRecord.yaml"]["stimulation_events"]
-    ],
-    "duty_cycle": [
-    re.search(r"user defined analog:\s+(.*?)\s+1 repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"]).group(1)
-    for event in data["AnnotationRecord.yaml"]["stimulation_events"]
-    ],
-    "stimulation_timeframes": [x["timepoint_index"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]],
-    "stimulation_ms": [parse_stimulation_xml(x["stimulation_data"]["mXML"])["event_timepoint_ms"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]],
-    "duration_ms": [parse_stimulation_xml(x["stimulation_data"]["mXML"])["duration_ms"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]],
-    "stimulated_rois": [parse_stimulation_xml(x["stimulation_data"]["mXML"])["stimulated_rois"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]],
-    "stimulated_roi_powers": [
-    [(x["roi_index"], x["target_power"]) for x in ev["rois"]] for ev in extract_roi_info(data["AnnotationRecord.yaml"]["stimulation_events"])
-    ],
-    "stimulated_roi_location": [
-    [(x["roi_index"], x["corner_1_xyz"], x["corner_2_xyz"]) for x in ev["rois"]] for ev in extract_roi_info(data["AnnotationRecord.yaml"]["stimulation_events"])
-    ],
-    "time_stamps": data["ElapsedTimes.yaml"]["theElapsedTimes"][1:], # Make sure it is the same with n_frames
-    "initial_roi_powers": [
+    "stimulation_events": safe_extract(lambda: len([x["timepoint_index"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]]), 0),
+    "repetitions": safe_extract(lambda: [
+        int(re.search(r"(\d+)\s+repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"]).group(1))
+        for event in data["AnnotationRecord.yaml"]["stimulation_events"]
+    ], []),
+    "duty_cycle": safe_extract(lambda: [
+        re.search(r"user defined analog:\s+(.*?)\s+1 repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"]).group(1)
+        for event in data["AnnotationRecord.yaml"]["stimulation_events"]
+    ], []),
+    "stimulation_timeframes": safe_extract(lambda: [x["timepoint_index"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]], []),
+    "stimulation_ms": safe_extract(lambda: [parse_stimulation_xml(x["stimulation_data"]["mXML"])["event_timepoint_ms"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]], []),
+    "duration_ms": safe_extract(lambda: [parse_stimulation_xml(x["stimulation_data"]["mXML"])["duration_ms"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]], []),
+    "stimulated_rois": safe_extract(lambda: [parse_stimulation_xml(x["stimulation_data"]["mXML"])["stimulated_rois"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]], []),
+    "stimulated_roi_powers": safe_extract(lambda: [
+        [(x["roi_index"], x["target_power"]) for x in ev["rois"]] for ev in extract_roi_info(data["AnnotationRecord.yaml"]["stimulation_events"])
+    ], []),
+    "stimulated_roi_location": safe_extract(lambda: [
+        [(x["roi_index"], x["corner_1_xyz"], x["corner_2_xyz"]) for x in ev["rois"]] for ev in extract_roi_info(data["AnnotationRecord.yaml"]["stimulation_events"])
+    ], []),
+    "time_stamps": safe_extract(lambda: data["ElapsedTimes.yaml"]["theElapsedTimes"][1:], []),
+    "initial_roi_powers": safe_extract(lambda: [
         (roi_id, roi_data.get('mTargetPower')) for roi_id, roi_data in data["AnnotationRecord.yaml"]["initial_rois"].items()
-    ],
-    "initial_roi_location": [
+    ], []),
+    "initial_roi_location": safe_extract(lambda: [
         (roi_id, 
          tuple(roi_data.get('StructArrayValues', [])[0:3]), 
          tuple(roi_data.get('StructArrayValues', [])[3:6])) 
         for roi_id, roi_data in data["AnnotationRecord.yaml"]["initial_rois"].items()
-    ]
+    ], [])
 }
 
 print("Saving experiment_summary.csv...")
@@ -399,9 +431,9 @@ with open_overwrite(Path(folder_path) / 'experiment_summary.json', 'w', encoding
 print(f"JSON file and Pickle file saved to {folder_path}")
 
 
-if variables["Elapsed_time_offset"] != 0:   
+if variables["Elapsed_time_offset"] != "NA" and variables["Elapsed_time_offset"] != 0:   
     print(f"⚠️ Warning: Elapsed time offset is {variables['Elapsed_time_offset']} ms, not zero as expected.")
-if variables["n_frames"] != len(variables["time_stamps"]):
+if variables["n_frames"] != "NA" and variables["time_stamps"] != "NA" and variables["n_frames"] != len(variables["time_stamps"]):
     print(f"⚠️ Warning: Number of frames ({variables['n_frames']}) does not match length of time stamps ({len(variables['time_stamps'])}).")
 
 print("\n[OK] Files saved successfully.")

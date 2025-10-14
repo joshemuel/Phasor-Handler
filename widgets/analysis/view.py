@@ -170,7 +170,8 @@ class AnalysisWidget(QWidget):
         zproj_group.setLayout(zproj_layout)
 
         # --- BnC Group ---
-        bnc_group = QGroupBox("Brightness and Contrast")
+        self.bnc_group = QGroupBox("Brightness and Contrast")
+        self.bnc_group.setObjectName('bnc_group')
         bnc_layout = QVBoxLayout()
         bnc_labels = QHBoxLayout()
 
@@ -235,8 +236,8 @@ class AnalysisWidget(QWidget):
         bnc_layout.addLayout(bnc_labels)
         bnc_layout.addLayout(controls_layout)
         bnc_layout.addLayout(buttons_layout)
-        bnc_group.setLayout(bnc_layout)
-        
+        self.bnc_group.setLayout(bnc_layout)
+
         # Track which channel is currently selected for BnC
         self._bnc_active_channel = 1
 
@@ -247,7 +248,7 @@ class AnalysisWidget(QWidget):
         midl_vbox.addWidget(self.view_metadata_button)
 
         midr_vbox.addWidget(zproj_group)
-        midr_vbox.addWidget(bnc_group)
+        midr_vbox.addWidget(self.bnc_group)
         
 
         midl_vbox.addStretch(0.5)
@@ -469,7 +470,7 @@ class AnalysisWidget(QWidget):
 
     def _on_bnc_reset(self):
         """Reset BnC values to default range (0-99.65)."""
-        self.bnc_spinbox_min.setValue(0.5)
+        self.bnc_spinbox_min.setValue(1.0)
         self.bnc_spinbox_max.setValue(99.5)
         
     def _on_percentile_changed(self):
@@ -567,6 +568,7 @@ class AnalysisWidget(QWidget):
         controls_enabled = not z_projection_active and getattr(self.window, '_current_tif', None) is not None
         
         try:
+            # Toggle enabled state for controls
             self.bnc_channel1_button.setEnabled(controls_enabled)
             # Only enable channel 2 if it exists and Z projections are not active
             has_channel2 = getattr(self.window, '_current_tif_chan2', None) is not None
@@ -574,7 +576,28 @@ class AnalysisWidget(QWidget):
             self.bnc_spinbox_min.setEnabled(controls_enabled)
             self.bnc_spinbox_max.setEnabled(controls_enabled)
             self.bnc_reset_button.setEnabled(controls_enabled)
-            
+
+            # Also update the main BnC QPushButton (dialog launcher) to reflect disabled state
+            self.cnb_button.setEnabled(controls_enabled)
+
+            # If the bnc_group exists, set a dynamic property so stylesheet can grey it out
+            try:
+                bnc_group = getattr(self, 'bnc_group', None)
+                # Fallback to searching by objectName on the widget tree
+                if bnc_group is None:
+                    # The local variable was set during init; try to find it via findChild
+                    bnc_group = self.findChild(QGroupBox, 'bnc_group')
+                if bnc_group is not None:
+                    bnc_group.setProperty('zprojActive', z_projection_active)
+                    # disable child widgets for visual clarity as well
+                    for child in bnc_group.findChildren((QPushButton, QDoubleSpinBox)):
+                        child.setEnabled(controls_enabled and (not z_projection_active))
+                    # Refresh style
+                    bnc_group.style().unpolish(bnc_group)
+                    bnc_group.style().polish(bnc_group)
+            except Exception:
+                pass
+
             if z_projection_active:
                 print("DEBUG: Z projection active - BnC controls disabled")
             else:

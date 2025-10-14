@@ -12,6 +12,7 @@ from widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
 from tools import misc
 from workers import RegistrationWorker
 from models.dir_manager import DirManager
+from themes import apply_dark_theme
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -235,6 +236,10 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # Apply consistent dark theme
+    apply_dark_theme(app)
+    
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

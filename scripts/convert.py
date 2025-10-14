@@ -89,16 +89,20 @@ def process_single_folder(folder_path: str,
 
     ch_data: Dict[str, np.ndarray] = {}
     if ch0_files:
-        ch_data["Ch0"] = load_and_concat(ch0_files)
+        ch0_result = load_and_concat(ch0_files)
+        if ch0_result is not None:
+            ch_data["Ch0"] = ch0_result
     if ch1_files:
-        ch_data["Ch1"] = load_and_concat(ch1_files)
+        ch1_result = load_and_concat(ch1_files)
+        if ch1_result is not None:
+            ch_data["Ch1"] = ch1_result
 
-    if not ch_data:
+    if len(ch_data) == 0:
         print(f"[WARN] No usable image data loaded from {folder_path}.")
         return
 
     # Verify that channel spatial dimensions match
-    shapes = {k: v.shape[1:] for k, v in ch_data.items()}
+    shapes = {k: v.shape[1:] for k, v in ch_data.items() if v is not None}
     if len(set(shapes.values())) > 1:
         raise ValueError(f"Channel spatial shape mismatch in '{folder_path}': {shapes}")
 
@@ -115,8 +119,9 @@ def process_single_folder(folder_path: str,
             interleaved[1::2] = ch1
             save_array = interleaved
         else:
-            # If only one channel exists, just save it directly
-            save_array = ch_data.get("Ch0") or ch_data.get("Ch1")
+            save_array = ch_data.get("Ch0")
+            if save_array is None:
+                save_array = ch_data.get("Ch1")
     elif mode == "block":
         concat_list = [ch_data[k] for k in ("Ch0", "Ch1") if k in ch_data]
         save_array = np.concatenate(concat_list, axis=0)
