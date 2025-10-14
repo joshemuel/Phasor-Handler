@@ -27,12 +27,11 @@ It provides a PyQt6 GUI for viewing registered or raw stacks (Ch1/Ch2), z-projec
 
 For each dataset directory, Phasor Handler looks for any of:
 
-<dataset_dir>/
-Ch1-reg.tif
-Ch2-reg.tif                 # optional
-ImageData_Ch0_TP0000000.npy # raw fallback for Ch1
-ImageData_Ch1_TP0000000.npy # optional raw fallback for Ch2
-experiment_summary.pkl      # optional metadata (or .json)
+- Ch1-reg.tif
+- Ch2-reg.tif                 # optional
+- ImageData_Ch0_TP0000000.npy # raw fallback for Ch1
+- ImageData_Ch1_TP0000000.npy # optional raw fallback for Ch2
+- experiment_summary.pkl      # optional metadata (or .json)
 
 Registered TIFFs are preferred when available; raw NPYs are used as fallback.
 
@@ -69,3 +68,9 @@ This project provides an `environment.yml` for Windows. The environment is large
   ```powershell
   conda activate suite2p
   python app.py
+## Update (Windows, Conda)
+
+### 1) Go to your local repo and pull the latest code from the branch you use
+```powershell
+cd Phasor-Handler
+git pull --ff-only
