@@ -1,5 +1,5 @@
 """
-Dark theme stylesheet for Phasor Handler application.
+(DEPRECATED) Dark theme stylesheet for Phasor Handler application.
 Provides consistent dark appearance across all devices and platforms.
 """
 
@@ -160,15 +160,6 @@ def get_dark_stylesheet():
         background-color: #404040;
     }
     
-    /* Use simple CSS triangles for arrows - most reliable cross-platform */
-    QComboBox::down-arrow {
-        width: 0;
-        height: 0;
-        border-left: 5px solid transparent;
-        border-right: 5px solid transparent;
-        border-top: 6px solid #ffffff;
-    }
-    
     QComboBox QAbstractItemView {
         background-color: #3c3c3c;
         color: #ffffff;
@@ -240,7 +231,7 @@ def get_dark_stylesheet():
         background-color: #404040;
         border: 1px solid #555555;
         width: 18px;
-        height: 12px;
+        height: 10px;
     }
     
     QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
@@ -248,28 +239,12 @@ def get_dark_stylesheet():
         border-color: #3daee9;
     }
     
-    QDoubleSpinBox::up-arrow {
-        width: 0;
-        height: 0;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-bottom: 5px solid #ffffff;
-    }
-
-    QDoubleSpinBox::down-arrow {
-        width: 0;
-        height: 0;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-top: 5px solid #ffffff;
-    }
-    
     QSpinBox {
         background-color: #3c3c3c;
         color: #ffffff;
         border: 1px solid #555555;
         border-radius: 4px;
-        padding: 2px 4px;
+        padding: 2px 2px;
     }
     
     QSpinBox:hover {
@@ -280,28 +255,12 @@ def get_dark_stylesheet():
         background-color: #404040;
         border: 1px solid #555555;
         width: 18px;
-        height: 12px;
+        height: 10px;
     }
     
     QSpinBox::up-button:hover, QSpinBox::down-button:hover {
         background-color: #4a4a4a;
         border-color: #3daee9;
-    }
-    
-    QSpinBox::up-arrow {
-        width: 0;
-        height: 0;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-bottom: 5px solid #ffffff;
-    }
-
-    QSpinBox::down-arrow {
-        width: 0;
-        height: 0;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-top: 5px solid #ffffff;
     }
     
     QScrollBar:vertical {

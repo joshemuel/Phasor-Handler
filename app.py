@@ -13,6 +13,7 @@ from tools import misc
 from workers import RegistrationWorker
 from models.dir_manager import DirManager
 from themes import apply_dark_theme
+import qdarktheme
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -238,7 +239,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     
     # Apply consistent dark theme
-    apply_dark_theme(app)
+    qdarktheme.setup_theme()
     
     window = MainWindow()
     window.show()
