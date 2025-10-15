@@ -15,7 +15,8 @@ import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .components import ImageViewWidget, TraceplotWidget, CircleRoiTool, RoiListWidget, MetadataViewer
+from .components import ImageViewWidget, TraceplotWidget, CircleRoiTool, RoiListWidget, MetadataViewer, BnCWidget
+
 
 
 class AnalysisWidget(QWidget):
@@ -110,10 +111,6 @@ class AnalysisWidget(QWidget):
         self.file_type_button.clicked.connect(self.toggle_file_type)
         self._using_registered = True  
 
-        self.cnb_button = QPushButton("BnC (IN PROGRESS)")
-        self.cnb_button.setEnabled(False)
-        self.cnb_button.clicked.connect(self.open_contrast_dialog)
-
         self.stimulation_area_button = QPushButton("Show Stimulation")
         self.stimulation_area_button.setEnabled(False)
         self.stimulation_area_button.setCheckable(True)
@@ -169,75 +166,14 @@ class AnalysisWidget(QWidget):
         zproj_layout.addWidget(self.zproj_mean_button)
         zproj_group.setLayout(zproj_layout)
 
-        # --- BnC Group ---
-        self.bnc_group = QGroupBox("Brightness and Contrast")
-        self.bnc_group.setObjectName('bnc_group')
-        bnc_layout = QVBoxLayout()
-        bnc_labels = QHBoxLayout()
-
-        # Channel selection buttons (mutually exclusive)
-        channel_buttons_layout = QHBoxLayout()
+        # --- BnC Widget ---
+        self.bnc_widget = BnCWidget(self)
         
-        self.bnc_channel1_button = QPushButton("Channel 1")
-        self.bnc_channel1_button.setCheckable(True)
-        self.bnc_channel1_button.setChecked(True)  # Default to Channel 1
-        self.bnc_channel1_button.clicked.connect(lambda: self._on_bnc_channel_selected(1))
-        self.bnc_channel1_button.setMaximumWidth(80)
+        # Connect BnC widget signals
+        self.bnc_widget.percentileChanged.connect(self._on_bnc_percentile_changed)
+        self.bnc_widget.channelChanged.connect(self._on_bnc_channel_selected)
+        self.bnc_widget.resetRequested.connect(self._on_bnc_reset)
         
-        self.bnc_channel2_button = QPushButton("Channel 2")
-        self.bnc_channel2_button.setCheckable(True)
-        self.bnc_channel2_button.setChecked(False)
-        self.bnc_channel2_button.setEnabled(False)  # Initially disabled
-        self.bnc_channel2_button.clicked.connect(lambda: self._on_bnc_channel_selected(2))
-        self.bnc_channel2_button.setMaximumWidth(80)
-        
-        channel_buttons_layout.addWidget(self.bnc_channel1_button)
-        channel_buttons_layout.addWidget(self.bnc_channel2_button)
-
-        # Controls layout (minimal spinboxes + auto button)
-        controls_layout = QHBoxLayout()
-        
-        # Minimal spinboxes
-        self.bnc_spinbox_min = QDoubleSpinBox()
-        self.bnc_spinbox_min.setRange(0.0, 100.0)
-        self.bnc_spinbox_min.setSingleStep(0.5)
-        self.bnc_spinbox_min.setValue(0.5)
-        self.bnc_spinbox_min.setMaximumWidth(80)  # Minimal width
-        self.bnc_spinbox_min.setToolTip("Lower percentile cutoff")
-        self.bnc_spinbox_min.valueChanged.connect(self._on_bnc_percentile_changed)
-
-        self.bnc_spinbox_max = QDoubleSpinBox()
-        self.bnc_spinbox_max.setRange(0.0, 100.0)
-        self.bnc_spinbox_max.setSingleStep(0.5)
-        self.bnc_spinbox_max.setValue(99.5)
-        self.bnc_spinbox_max.setMaximumWidth(80)  # Minimal width
-        self.bnc_spinbox_max.setToolTip("Upper percentile cutoff")
-        self.bnc_spinbox_max.valueChanged.connect(self._on_bnc_percentile_changed)
-
-        # Reset and Normalize buttons
-        buttons_layout = QHBoxLayout()
-        
-        self.bnc_reset_button = QPushButton("Reset")
-        self.bnc_reset_button.setMaximumWidth(80)
-        self.bnc_reset_button.setToolTip("Reset to default range (0-100)")
-        self.bnc_reset_button.clicked.connect(self._on_bnc_reset)
-        
-        buttons_layout.addWidget(self.bnc_reset_button)
-        buttons_layout.addStretch()
-
-        bnc_labels.addWidget(QLabel("Min (pth):"))
-        bnc_labels.addWidget(QLabel("Max (pth):"))
-
-        controls_layout.addWidget(self.bnc_spinbox_min)
-        controls_layout.addWidget(self.bnc_spinbox_max)
-        controls_layout.addStretch()  # Push everything to the left
-
-        bnc_layout.addLayout(channel_buttons_layout)
-        bnc_layout.addLayout(bnc_labels)
-        bnc_layout.addLayout(controls_layout)
-        bnc_layout.addLayout(buttons_layout)
-        self.bnc_group.setLayout(bnc_layout)
-
         # Track which channel is currently selected for BnC
         self._bnc_active_channel = 1
 
@@ -248,7 +184,8 @@ class AnalysisWidget(QWidget):
         midl_vbox.addWidget(self.view_metadata_button)
 
         midr_vbox.addWidget(zproj_group)
-        midr_vbox.addWidget(self.bnc_group)
+        midr_vbox.addWidget(self.bnc_widget)
+
         
 
         midl_vbox.addStretch(0.5)
@@ -347,7 +284,6 @@ class AnalysisWidget(QWidget):
             self.window.analysis_list_widget = self.analysis_list_widget
             self.window.channel_button = self.channel_button
             self.window.file_type_button = self.file_type_button
-            self.window.cnb_button = self.cnb_button
             self.window.composite_button = self.composite_button
             self.window.zproj_std_button = self.zproj_std_button
             self.window.zproj_max_button = self.zproj_max_button
@@ -426,19 +362,13 @@ class AnalysisWidget(QWidget):
         """Handle BnC channel selection (mutually exclusive buttons)."""
         self._bnc_active_channel = channel
         
-        # Ensure only one button is checked at a time
+        # Load appropriate percentiles for the selected channel
         if channel == 1:
-            self.bnc_channel1_button.setChecked(True)
-            self.bnc_channel2_button.setChecked(False)
-            # Load Channel 1 percentiles
-            self.bnc_spinbox_min.setValue(self._ch1_percentile_min)
-            self.bnc_spinbox_max.setValue(self._ch1_percentile_max)
+            self.bnc_widget.set_min_percentile(self._ch1_percentile_min)
+            self.bnc_widget.set_max_percentile(self._ch1_percentile_max)
         else:
-            self.bnc_channel1_button.setChecked(False)
-            self.bnc_channel2_button.setChecked(True)
-            # Load Channel 2 percentiles
-            self.bnc_spinbox_min.setValue(self._ch2_percentile_min)
-            self.bnc_spinbox_max.setValue(self._ch2_percentile_max)
+            self.bnc_widget.set_min_percentile(self._ch2_percentile_min)
+            self.bnc_widget.set_max_percentile(self._ch2_percentile_max)
         
         # Update the image display
         if getattr(self.window, '_current_tif', None) is not None:
@@ -448,13 +378,13 @@ class AnalysisWidget(QWidget):
         """Handle changes to the BnC percentile spinboxes and update the image."""
         # Only update if we have image data loaded
         if getattr(self.window, '_current_tif', None) is not None:
-            # Get current values
-            min_val = self.bnc_spinbox_min.value()
-            max_val = self.bnc_spinbox_max.value()
+            # Get current values from widget
+            min_val = self.bnc_widget.get_min_percentile()
+            max_val = self.bnc_widget.get_max_percentile()
             
             # Ensure min < max
             if min_val >= max_val:
-                self.bnc_spinbox_max.setValue(min_val + 0.1)
+                self.bnc_widget.set_max_percentile(min_val + 0.1)
                 max_val = min_val + 0.1
             
             # Store values for the active channel
@@ -469,9 +399,9 @@ class AnalysisWidget(QWidget):
             self.update_tif_frame()
 
     def _on_bnc_reset(self):
-        """Reset BnC values to default range (0-99.65)."""
-        self.bnc_spinbox_min.setValue(1.0)
-        self.bnc_spinbox_max.setValue(99.5)
+        """Reset BnC values to default range (0.5-99.5)."""
+        # Widget handles the reset internally and will emit signals
+        pass
         
     def _on_percentile_changed(self):
         """Handle changes to the percentile spinboxes and update the image."""
@@ -569,16 +499,8 @@ class AnalysisWidget(QWidget):
         
         try:
             # Toggle enabled state for controls
-            self.bnc_channel1_button.setEnabled(controls_enabled)
-            # Only enable channel 2 if it exists and Z projections are not active
             has_channel2 = getattr(self.window, '_current_tif_chan2', None) is not None
-            self.bnc_channel2_button.setEnabled(controls_enabled and has_channel2)
-            self.bnc_spinbox_min.setEnabled(controls_enabled)
-            self.bnc_spinbox_max.setEnabled(controls_enabled)
-            self.bnc_reset_button.setEnabled(controls_enabled)
-
-            # Also update the main BnC QPushButton (dialog launcher) to reflect disabled state
-            self.cnb_button.setEnabled(controls_enabled)
+            self.bnc_widget.enable_controls(controls_enabled, has_channel2)
 
             # If the bnc_group exists, set a dynamic property so stylesheet can grey it out
             try:
@@ -656,7 +578,6 @@ class AnalysisWidget(QWidget):
         self.channel_button.setEnabled(False)
         self.composite_button.setEnabled(False)
         self.stimulation_area_button.setEnabled(False)
-        self.cnb_button.setEnabled(False)
         self.zproj_std_button.setEnabled(False)
         self.zproj_max_button.setEnabled(False)
         self.zproj_mean_button.setEnabled(False)
@@ -665,11 +586,7 @@ class AnalysisWidget(QWidget):
         self.save_img.setEnabled(False)
         
         # Disable BnC controls when no data is loaded
-        self.bnc_channel1_button.setEnabled(False)
-        self.bnc_channel2_button.setEnabled(False)
-        self.bnc_spinbox_min.setEnabled(False)
-        self.bnc_spinbox_max.setEnabled(False)
-        self.bnc_reset_button.setEnabled(False)
+        self.bnc_widget.enable_controls(False, False)
 
     def _update_ui_from_experiment_data(self, data, previous_img_wh):
         """Update UI state based on loaded experiment data."""
@@ -720,24 +637,13 @@ class AnalysisWidget(QWidget):
         self.zproj_std_button.setEnabled(True)
         self.zproj_max_button.setEnabled(True)
         self.zproj_mean_button.setEnabled(True)
-            
-        # Enable contrast & brightness when an image is loaded
-        self.cnb_button.setEnabled(True)
         
         # Enable BnC controls when an image is loaded
-        self.bnc_channel1_button.setEnabled(True)
-        self.bnc_spinbox_min.setEnabled(True)
-        self.bnc_spinbox_max.setEnabled(True)
-        self.bnc_reset_button.setEnabled(True)
+        self.bnc_widget.enable_controls(True, has_channel2)
         
-        # Enable/disable Channel 2 button based on availability
-        if has_channel2:
-            self.bnc_channel2_button.setEnabled(True)
-        else:
-            self.bnc_channel2_button.setEnabled(False)
-            # Ensure Channel 1 is selected if Channel 2 becomes unavailable
-            if self._bnc_active_channel == 2:
-                self._on_bnc_channel_selected(1)
+        # Ensure Channel 1 is selected if Channel 2 becomes unavailable
+        if not has_channel2 and self._bnc_active_channel == 2:
+            self._on_bnc_channel_selected(1)
         
         # Update BnC controls based on current Z projection state
         self._update_bnc_controls_for_zproj()
@@ -753,11 +659,11 @@ class AnalysisWidget(QWidget):
         
         # Restore BnC values for the currently selected channel
         if self._bnc_active_channel == 1:
-            self.bnc_spinbox_min.setValue(self._ch1_percentile_min)
-            self.bnc_spinbox_max.setValue(self._ch1_percentile_max)
+            self.bnc_widget.set_min_percentile(self._ch1_percentile_min)
+            self.bnc_widget.set_max_percentile(self._ch1_percentile_max)
         else:
-            self.bnc_spinbox_min.setValue(self._ch2_percentile_min)
-            self.bnc_spinbox_max.setValue(self._ch2_percentile_max)
+            self.bnc_widget.set_min_percentile(self._ch2_percentile_min)
+            self.bnc_widget.set_max_percentile(self._ch2_percentile_max)
         
         # Check if image dimensions changed and resize if needed
         self._check_and_resize_for_image_change(tif, previous_img_wh)
@@ -914,6 +820,9 @@ class AnalysisWidget(QWidget):
 
         # Normalize base channel (green) using robust percentile clipping
         g = img.astype(np.float32)
+        
+        # Update histogram widget with current image data
+        self.bnc_widget.set_image_data(g, img_chan2.astype(np.float32) if img_chan2 is not None else None)
 
         # Check if any Z projection is active
         z_projection_active = (getattr(self, '_zproj_std', False) or 
@@ -927,8 +836,8 @@ class AnalysisWidget(QWidget):
         else:
             # Use BnC spinbox values for percentile clipping
             if self._bnc_active_channel == 1:
-                g_low_percentile = self.bnc_spinbox_min.value()
-                g_high_percentile = self.bnc_spinbox_max.value()
+                g_low_percentile = self.bnc_widget.get_min_percentile()
+                g_high_percentile = self.bnc_widget.get_max_percentile()
             else:
                 g_low_percentile = self._ch1_percentile_min
                 g_high_percentile = self._ch1_percentile_max
@@ -963,8 +872,8 @@ class AnalysisWidget(QWidget):
             else:
                 # Use BnC spinbox values for percentile clipping for red channel
                 if self._bnc_active_channel == 2:
-                    r_low_percentile = self.bnc_spinbox_min.value()
-                    r_high_percentile = self.bnc_spinbox_max.value()
+                    r_low_percentile = self.bnc_widget.get_min_percentile()
+                    r_high_percentile = self.bnc_widget.get_max_percentile()
                 else:
                     r_low_percentile = self._ch2_percentile_min
                     r_high_percentile = self._ch2_percentile_max
@@ -1005,8 +914,8 @@ class AnalysisWidget(QWidget):
                 
                 # Apply contrast enhancement using BnC spinbox values
                 if self._bnc_active_channel == 2:
-                    r_low_percentile = self.bnc_spinbox_min.value()
-                    r_high_percentile = self.bnc_spinbox_max.value()
+                    r_low_percentile = self.bnc_widget.get_min_percentile()
+                    r_high_percentile = self.bnc_widget.get_max_percentile()
                 else:
                     r_low_percentile = self._ch2_percentile_min
                     r_high_percentile = self._ch2_percentile_max
@@ -1344,235 +1253,6 @@ class AnalysisWidget(QWidget):
         self.channel_button.setEnabled(has_ch2 and not is_composite)
         # CNB button should be enabled when there's any image loaded
         has_img = getattr(self.window, '_current_tif', None) is not None
-        self.cnb_button.setEnabled(has_img)
-
-    def open_contrast_dialog(self):
-        """Open enhanced brightness/contrast dialog with histogram display and per-channel controls."""
-        print("DEBUG: BnC button clicked!")
-
-        # Check if we have image data
-        tif = getattr(self.window, '_current_tif', None)
-        tif_chan2 = getattr(self.window, '_current_tif_chan2', None)
-        
-        print(f"DEBUG: tif is None: {tif is None}")
-        if tif is not None:
-            print(f"DEBUG: tif shape: {tif.shape}")
-        
-        if tif is None:
-            print("DEBUG: No image data, returning")
-            return
-
-        # If already open, raise existing dialog
-        if getattr(self.window, '_cnb_window', None) and self.window._cnb_window.isVisible():
-            print("DEBUG: Dialog already open, raising")
-            self.window._cnb_window.raise_()
-            return
-
-        try:
-            # Get current frame data for histogram
-            frame_idx = int(self.tif_slider.value()) if hasattr(self, 'tif_slider') else 0
-            print(f"DEBUG: frame_idx: {frame_idx}")
-            
-            # Extract current frame data
-            if tif.ndim >= 3:
-                ch1_data = tif[frame_idx] if tif.ndim >= 3 else tif
-                ch2_data = tif_chan2[frame_idx] if tif_chan2 is not None and tif_chan2.ndim >= 3 else tif_chan2
-            else:
-                ch1_data = tif
-                ch2_data = tif_chan2
-                
-            print(f"DEBUG: ch1_data shape: {ch1_data.shape if ch1_data is not None else None}")
-            print(f"DEBUG: ch2_data shape: {ch2_data.shape if ch2_data is not None else None}")
-            
-            # Import and create the BnC dialog
-            print("DEBUG: Importing BnC dialog...")
-            from components.bnc import BnCDialog, apply_bnc_to_image, create_qimage_from_array, create_composite_image
-            print("DEBUG: Import successful")
-            
-            # Initialize global BnC settings if they don't exist
-            if not hasattr(self.window, '_global_bnc_settings'):
-                self.window._global_bnc_settings = {
-                    'ch1': {'min': 0, 'max': 255, 'contrast': 1.0},
-                    'ch2': {'min': 0, 'max': 255, 'contrast': 1.0},
-                    'enabled': True
-                }
-                print("DEBUG: Initialized global BnC settings")
-            
-            # Create and setup dialog
-            print("DEBUG: Creating BnC dialog...")
-            dlg = BnCDialog(self)
-            print("DEBUG: Dialog created")
-            
-            print("DEBUG: Setting image data...")
-            dlg.set_image_data(ch1_data, ch2_data)
-            
-            # Load existing global settings into dialog
-            dlg.set_settings(self.window._global_bnc_settings)
-            print("DEBUG: Loaded existing settings into dialog")
-            
-            print("DEBUG: Image data set")
-            
-            # Connect settings changes to live preview and global storage
-            print("DEBUG: Connecting signals...")
-            dlg.settings_changed.connect(self._on_bnc_settings_changed)
-            print("DEBUG: Signals connected")
-            
-            # Store reference and show
-            print("DEBUG: Showing dialog...")
-            self.window._cnb_window = dlg
-            dlg.show()
-            print("DEBUG: Dialog should be visible now")
-            
-        except Exception as e:
-            print(f"DEBUG: Exception in open_contrast_dialog: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def _on_bnc_settings_changed(self, settings):
-        """Handle BnC settings changes and update live preview."""
-        try:
-            # Store settings globally for persistence across frames/directories
-            if not hasattr(self.window, '_global_bnc_settings'):
-                self.window._global_bnc_settings = {
-                    'ch1': {'min': 0, 'max': 255, 'contrast': 1.0},
-                    'ch2': {'min': 0, 'max': 255, 'contrast': 1.0},
-                    'enabled': True
-                }
-            
-            channel_key = 'ch1' if settings['channel'] == 0 else 'ch2'
-            self.window._global_bnc_settings[channel_key] = {
-                'min': settings['min'],
-                'max': settings['max'], 
-                'contrast': settings['contrast']
-            }
-            self.window._global_bnc_settings['enabled'] = True
-            
-            print(f"DEBUG: Updated global BnC settings for {channel_key}: {self.window._global_bnc_settings[channel_key]}")
-            
-            # Apply live preview
-            self._apply_bnc_live_preview()
-        except Exception as e:
-            print(f"DEBUG: Error in BnC settings changed: {e}")
-
-    def _apply_bnc_live_preview(self):
-        """Apply BnC settings to create live preview of the image."""
-        from components.bnc import apply_bnc_to_image, create_qimage_from_array, create_composite_image
-        from PyQt6.QtGui import QPixmap
-        
-        try:
-            tif = getattr(self.window, '_current_tif', None)
-            tif_chan2 = getattr(self.window, '_current_tif_chan2', None)
-            
-            if tif is None:
-                return
-                
-            # Get current frame data
-            frame_idx = int(self.tif_slider.value()) if hasattr(self, 'tif_slider') else 0
-            
-            if tif.ndim >= 3:
-                ch1_data = tif[frame_idx]
-                ch2_data = tif_chan2[frame_idx] if tif_chan2 is not None and tif_chan2.ndim >= 3 else tif_chan2
-            else:
-                ch1_data = tif
-                ch2_data = tif_chan2
-                
-            # Get global BnC settings
-            settings = getattr(self.window, '_global_bnc_settings', {
-                'ch1': {'min': 0, 'max': 255, 'contrast': 1.0},
-                'ch2': {'min': 0, 'max': 255, 'contrast': 1.0},
-                'enabled': True
-            })
-            
-            if not settings.get('enabled', True):
-                return
-            
-            # Create preview image
-            if ch2_data is not None and hasattr(self, 'composite_button') and self.composite_button.isChecked():
-                # Composite mode
-                preview_img = create_composite_image(ch1_data, ch2_data, settings['ch1'], settings['ch2'])
-            else:
-                # Single channel mode
-                active_ch = getattr(self, "_active_channel", 1)
-                if ch2_data is not None and active_ch == 2:
-                    # Show channel 2
-                    preview_img = apply_bnc_to_image(ch2_data, settings['ch2']['min'], settings['ch2']['max'], settings['ch2']['contrast'])
-                    # Convert to RGBA grayscale
-                    if preview_img.ndim == 2:
-                        h, w = preview_img.shape
-                        rgba = np.zeros((h, w, 4), dtype=np.uint8)
-                        rgba[..., :3] = preview_img[..., None]
-                        rgba[..., 3] = 255
-                        preview_img = rgba
-                else:
-                    # Show channel 1
-                    preview_img = apply_bnc_to_image(ch1_data, settings['ch1']['min'], settings['ch1']['max'], settings['ch1']['contrast'])
-                    # Convert to RGBA grayscale
-                    if preview_img.ndim == 2:
-                        h, w = preview_img.shape
-                        rgba = np.zeros((h, w, 4), dtype=np.uint8)
-                        rgba[..., :3] = preview_img[..., None]
-                        rgba[..., 3] = 255
-                        preview_img = rgba
-            
-            # Convert to QImage and display
-            if preview_img is not None:
-                qimg = create_qimage_from_array(preview_img)
-                pixmap = QPixmap.fromImage(qimg)
-                scaled_pixmap = pixmap.scaled(
-                    self.image_view.get_label_size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-                self.reg_tif_label.setPixmap(scaled_pixmap)
-                
-        except Exception as e:
-            print(f"DEBUG: Error applying BnC live preview: {e}")
-
-    def _apply_cnb_adjustments(self):
-        """Legacy method - redirects to new BnC live preview system."""
-        # If the new BnC dialog system is active, use that
-        if hasattr(self.window, '_global_bnc_settings') and self.window._global_bnc_settings.get('enabled', False):
-            self._apply_bnc_live_preview()
-            return
-
-        # Fallback to old system if no new settings exist
-        from PyQt6.QtGui import QPixmap
-        
-        if getattr(self.window, '_current_image_np', None) is None:
-            return
-
-        # Use basic contrast/brightness adjustment
-        img = self.window._current_image_np
-        contrast = float(getattr(self.window, '_cnb_contrast', 1.0))
-        
-        # Apply simple contrast adjustment
-        if img.dtype == np.uint8:
-            adjusted = img.astype(np.float32)
-            adjusted = ((adjusted - 128) * contrast) + 128
-            adjusted = np.clip(adjusted, 0, 255).astype(np.uint8)
-        else:
-            adjusted = img
-            
-        if adjusted.ndim == 2:
-            h, w = adjusted.shape
-            rgba = np.zeros((h, w, 4), dtype=np.uint8)
-            rgba[..., :3] = adjusted[..., None]
-            rgba[..., 3] = 255
-            adjusted = rgba
-        elif adjusted.ndim == 3 and adjusted.shape[2] == 3:
-            h, w = adjusted.shape[:2]
-            rgba = np.zeros((h, w, 4), dtype=np.uint8)
-            rgba[..., :3] = adjusted
-            rgba[..., 3] = 255
-            adjusted = rgba
-
-        try:
-            from PyQt6.QtGui import QImage
-            qimg = QImage(adjusted.data, adjusted.shape[1], adjusted.shape[0], adjusted.shape[1] * 4, QImage.Format.Format_RGBA8888)
-            pix = QPixmap.fromImage(qimg)
-            self.reg_tif_label.setPixmap(pix.scaled(self.image_view.get_label_size(), Qt.AspectRatioMode.KeepAspectRatio))
-        except Exception as e:
-            print(f"DEBUG: Error in legacy CNB adjustment: {e}")
 
     def open_metadata_viewer(self):
         """Open the metadata viewer dialog with current experiment data."""
