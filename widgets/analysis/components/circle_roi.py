@@ -1,4 +1,5 @@
 # TODO: Make it so that ROIs can be removed seamlessly
+# TODO Any left click redefines a new ROI, never edit. Edit is only right click and drag
 
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QRect, QPointF
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
@@ -249,24 +250,27 @@ class CircleRoiTool(QObject):
 
         if et == event.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.LeftButton and self._in_draw_rect(event.position()):
-                # Emit signal that ROI drawing has started
+                # LEFT CLICK: ALWAYS creates a new ROI (never edits existing ones)
+                # This clears any current selection and starts fresh drawing
                 self.roiDrawingStarted.emit()
                 
-                # start drawing: left button defines first corner
-                self._mode = 'draw'
-                self._dragging = True
+                # Clear any existing bbox to ensure we're starting fresh
+                self._bbox = None
                 self._start_pos = event.position()  # QPointF
                 self._current_pos = self._start_pos
-                # Reset rotation angle for new ROI to ensure default rotation
+                
+                # Initialize new ROI with default settings
+                self._mode = 'draw'
+                self._dragging = True
                 self._rotation_angle = 0.0
-                # Set default interaction mode to translate when drawing new ROI
                 self._interaction_mode = 'translate'
+                
                 self._update_bbox_from_points()
                 self._paint_overlay()
-                print(f"Started drawing new ROI in {self._interaction_mode} mode")
+                print(f"Started drawing NEW ROI (left-click always creates new)")
                 return True
 
-            # right button: check for ROI selection first, then translation/rotation
+            # RIGHT CLICK: Used for editing existing ROIs (select, translate, rotate)
             if event.button() == Qt.MouseButton.RightButton:
                 p = event.position()  # QPointF
                 

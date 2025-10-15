@@ -9,6 +9,8 @@ This widget encapsulates all trace plotting logic including:
 - Signal extraction and plotting methods
 """
 
+# TODO Make options only raw Fg and Fg - Fog / Fog for single channel recordings
+
 import numpy as np
 import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
