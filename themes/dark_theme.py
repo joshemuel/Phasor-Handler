@@ -54,9 +54,9 @@ def get_dark_stylesheet():
     
     /* Specific styling for small buttons to prevent text cropping */
     QPushButton[text*="Reset"], QPushButton[text*="Auto"], QPushButton[text*="Frames"] {
-        padding: 2px 6px;
-        min-width: 50px;
-        min-height: 20px;
+        padding: 2px 2px;
+        min-width: 30px;
+        min-height: 10px;
     }
     
     QPushButton:hover {
@@ -160,12 +160,13 @@ def get_dark_stylesheet():
         background-color: #404040;
     }
     
-    /* Use embedded SVG data-URIs for arrows so they render reliably across platforms */
+    /* Use simple CSS triangles for arrows - most reliable cross-platform */
     QComboBox::down-arrow {
-    /* chevron-down placeholder (will be replaced at runtime) */
-    image: url("/*BASE_CHEVRON_DOWN*/");
-        width: 14px;
-        height: 14px;
+        width: 0;
+        height: 0;
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        border-top: 6px solid #ffffff;
     }
     
     QComboBox QAbstractItemView {
@@ -248,17 +249,19 @@ def get_dark_stylesheet():
     }
     
     QDoubleSpinBox::up-arrow {
-    /* chevron-up placeholder (will be replaced at runtime) */
-    image: url("/*BASE_CHEVRON_UP*/");
-        width: 12px;
-        height: 12px;
+        width: 0;
+        height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-bottom: 5px solid #ffffff;
     }
 
     QDoubleSpinBox::down-arrow {
-    /* chevron-down placeholder (will be replaced at runtime) */
-    image: url("/*BASE_CHEVRON_DOWN*/");
-        width: 12px;
-        height: 12px;
+        width: 0;
+        height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid #ffffff;
     }
     
     QSpinBox {
@@ -286,17 +289,19 @@ def get_dark_stylesheet():
     }
     
     QSpinBox::up-arrow {
-    /* chevron-up placeholder (will be replaced at runtime) */
-    image: url("/*BASE_CHEVRON_UP*/");
-        width: 12px;
-        height: 12px;
+        width: 0;
+        height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-bottom: 5px solid #ffffff;
     }
 
     QSpinBox::down-arrow {
-    /* chevron-down placeholder (will be replaced at runtime) */
-    image: url("/*BASE_CHEVRON_DOWN*/");
-        width: 12px;
-        height: 12px;
+        width: 0;
+        height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid #ffffff;
     }
     
     QScrollBar:vertical {
@@ -363,19 +368,4 @@ def get_dark_stylesheet():
 
 def apply_dark_theme(app):
     """Apply the dark theme to the given QApplication instance."""
-    # Some platforms/encodings can mangle utf8-embedded SVGs in QSS strings.
-    # Instead, use local SVG files and insert file:// URIs into the stylesheet at runtime.
-    import os
-    stylesheet = get_dark_stylesheet()
-    base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    icon_dir = os.path.join(base, 'img', 'icons')
-    down_icon = os.path.join(icon_dir, 'chevron-down.svg')
-    up_icon = os.path.join(icon_dir, 'chevron-up.svg')
-    # Normalize for file URI
-    def to_file_uri(path):
-        p = os.path.abspath(path).replace('\\', '/')
-        return 'file:///' + p
-
-    stylesheet = stylesheet.replace('/*BASE_CHEVRON_DOWN*/', to_file_uri(down_icon))
-    stylesheet = stylesheet.replace('/*BASE_CHEVRON_UP*/', to_file_uri(up_icon))
-    app.setStyleSheet(stylesheet)
+    app.setStyleSheet(get_dark_stylesheet())

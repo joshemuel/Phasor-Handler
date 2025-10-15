@@ -74,10 +74,16 @@ class RegistrationWorker(QObject):
                     continue
 
                 if self.combine:
-                    for subfolder, outname in [("reg_tif", "Ch1-reg.tif"), ("reg_tif_chan2", "Ch2-reg.tif")]:
+                    # Determine which channels to concatenate based on user's nchannels parameter
+                    n_channels = int(self.params.get("n_channels", 1))
+                    channels_to_concat = [("reg_tif", "Ch1-reg.tif")]
+                    if n_channels >= 2:
+                        channels_to_concat.append(("reg_tif_chan2", "Ch2-reg.tif"))
+                    
+                    for subfolder, outname in channels_to_concat:
                         reg_tif_dir = os.path.join(outdir, "suite2p", "plane0", subfolder)
                         if not os.path.isdir(reg_tif_dir):
-                            self.log.emit(f"  No folder: {reg_tif_dir}")
+                            self.log.emit(f"  No folder: {reg_tif_dir} (skipping this channel)")
                             continue
                         
                         # Get all TIFF files and sort them with proper numerical ordering

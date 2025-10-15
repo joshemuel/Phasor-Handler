@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-    QComboBox, QSizePolicy
+    QComboBox, QSizePolicy, QSpinBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -47,6 +47,9 @@ class TraceplotWidget(QWidget):
         ylim_layout.setSpacing(2)
         ylim_layout.setContentsMargins(0, 0, 0, 0)
 
+        ylim_label_inner = QHBoxLayout()
+        ylim_label_inner.setContentsMargins(0, 0, 0, 0)
+
         ylim_label = QLabel("Y limits:")
         ylim_label.setSizePolicy(QSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
         ylim_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -63,15 +66,31 @@ class TraceplotWidget(QWidget):
         self.ylim_max_edit.setPlaceholderText("Max")
         self.ylim_max_edit.editingFinished.connect(self._update_trace_from_roi)
 
+        ylim_label_inner.addWidget(self.ylim_min_edit)
+        ylim_label_inner.addWidget(self.ylim_max_edit)
+        ylim_label_inner.addStretch()
+
         self.reset_ylim_button = QPushButton("Reset")
         self.reset_ylim_button.setFixedWidth(50)
+        self.reset_ylim_button.setFixedHeight(20)
         self.reset_ylim_button.clicked.connect(self._reset_ylim)
 
         ylim_layout.addWidget(ylim_label)
-        ylim_layout.addWidget(self.ylim_max_edit)
-        ylim_layout.addWidget(self.ylim_min_edit)
+        ylim_layout.addLayout(ylim_label_inner)
+        ylim_layout.addSpacing(4)
         ylim_layout.addWidget(self.reset_ylim_button)
         controls_layout.addLayout(ylim_layout)
+
+        # Baseline percentage spinbox
+        self.base_spinbox = QSpinBox()
+        self.base_spinbox.setRange(1, 99)
+        self.base_spinbox.setValue(10)
+        self.base_spinbox.setFixedWidth(60)
+        self.base_spinbox.setFixedHeight(25)
+        self.base_spinbox.valueChanged.connect(self._update_trace_from_roi)
+        controls_layout.addWidget(QLabel("Baseline %:"))
+        controls_layout.addWidget(self.base_spinbox)
+
 
         # Formula dropdown
         self.formula_dropdown = QComboBox()
@@ -240,7 +259,16 @@ class TraceplotWidget(QWidget):
         nframes = sig1.shape[0]
         if nframes <= 0:
             return
-        baseline_count = max(1, int(np.ceil(nframes * 0.10)))
+        # Determine baseline fraction from base_spinbox (percent).
+        try:
+            pct = int(self.base_spinbox.value()) if hasattr(self, 'base_spinbox') else 10
+            # Clamp between 1 and 99
+            pct = max(1, min(99, pct))
+            frac = float(pct) / 100.0
+        except Exception:
+            frac = 0.10
+
+        baseline_count = max(1, int(np.ceil(nframes * frac)))
         Fog = float(np.mean(sig1[:baseline_count]))
 
         self.trace_ax.cla()
@@ -277,6 +305,10 @@ class TraceplotWidget(QWidget):
                 metric = sig1
             elif formula_index == 3:
                 metric = sig2 if sig2 is not None else np.full_like(sig1, 0)
+            else:
+                # Default fallback for any unexpected formula_index
+                denom_val = Fog if (Fog is not None and Fog != 0) else 1e-6
+                metric = (sig1 - Fog) / denom_val
 
         current_frame = 0
         if hasattr(self.main_window, 'tif_slider'):
