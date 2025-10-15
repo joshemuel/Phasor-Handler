@@ -312,10 +312,16 @@ variables = {
     "stimulation_events": safe_extract(lambda: len([x["timepoint_index"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]]), 0),
     "repetitions": safe_extract(lambda: [
         int(re.search(r"(\d+)\s+repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"]).group(1))
+        if parse_stimulation_xml(event["stimulation_data"]["mXML"]) and 
+           re.search(r"(\d+)\s+repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"]) 
+        else "NA"
         for event in data["AnnotationRecord.yaml"]["stimulation_events"]
     ], []),
     "duty_cycle": safe_extract(lambda: [
         re.search(r"user defined analog:\s+(.*?)\s+1 repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"]).group(1)
+        if parse_stimulation_xml(event["stimulation_data"]["mXML"]) and 
+           re.search(r"user defined analog:\s+(.*?)\s+1 repetition", parse_stimulation_xml(event["stimulation_data"]["mXML"])["description_text"])
+        else "NA"
         for event in data["AnnotationRecord.yaml"]["stimulation_events"]
     ], []),
     "stimulation_timeframes": safe_extract(lambda: [x["timepoint_index"] for x in data["AnnotationRecord.yaml"]["stimulation_events"]], []),
@@ -339,6 +345,17 @@ variables = {
         for roi_id, roi_data in data["AnnotationRecord.yaml"]["initial_rois"].items()
     ], [])
 }
+
+# Validate that list lengths match stimulation_events count
+if variables['stimulation_events'] > 0:
+    list_vars = ['stimulation_timeframes', 'stimulation_ms', 'duration_ms', 
+                 'repetitions', 'duty_cycle', 'stimulated_rois', 
+                 'stimulated_roi_powers', 'stimulated_roi_location']
+    
+    for var_name in list_vars:
+        var_value = variables[var_name]
+        if isinstance(var_value, list) and len(var_value) != variables['stimulation_events']:
+            print(f"⚠️ Warning: {var_name} has {len(var_value)} entries but {variables['stimulation_events']} events expected.")
 
 print("Saving experiment_summary.csv...")
 with open_overwrite(Path(folder_path) / 'experiment_summary.csv', 'w', newline='', encoding='utf-8') as f:
@@ -366,16 +383,23 @@ with open_overwrite(Path(folder_path) / 'stimulation_events.csv', 'w', newline='
     writer = csv.DictWriter(f, fieldnames=event_headers)
     writer.writeheader()
     
-    # Loop through each of the 3 events to create a row
+    # Loop through each event to create a row
     for i in range(variables['stimulation_events']):
+        # Helper function to safely get list item or return 'NA'
+        def safe_list_get(lst, index, default='NA'):
+            try:
+                return lst[index] if index < len(lst) else default
+            except (IndexError, TypeError):
+                return default
+        
         writer.writerow({
             'event_index': i + 1,
-            'timepoint_frame': variables['stimulation_timeframes'][i],
-            'timepoint_ms': variables['stimulation_ms'][i],
-            'duration_ms': variables['duration_ms'][i],
-            'repetitions': variables['repetitions'][i],
-            'duty_cycle': variables['duty_cycle'][i],
-            'stimulated_rois': variables['stimulated_rois'][i]
+            'timepoint_frame': safe_list_get(variables['stimulation_timeframes'], i),
+            'timepoint_ms': safe_list_get(variables['stimulation_ms'], i),
+            'duration_ms': safe_list_get(variables['duration_ms'], i),
+            'repetitions': safe_list_get(variables['repetitions'], i),
+            'duty_cycle': safe_list_get(variables['duty_cycle'], i),
+            'stimulated_rois': safe_list_get(variables['stimulated_rois'], i)
         })
 
 # --- 3. Save the Detailed ROI Data ---
@@ -398,9 +422,13 @@ with open_overwrite(Path(folder_path) / 'roi_details.csv', 'w', newline='', enco
     
     # Nested loop: outer loop for events, inner loop for ROIs within that event
     for i in range(variables['stimulation_events']):
-        # Get the power and location data for the current event
-        powers = variables['stimulated_roi_powers'][i]
-        locations = variables['stimulated_roi_location'][i]
+        # Safely get the power and location data for the current event
+        try:
+            powers = variables['stimulated_roi_powers'][i] if i < len(variables['stimulated_roi_powers']) else []
+            locations = variables['stimulated_roi_location'][i] if i < len(variables['stimulated_roi_location']) else []
+        except (IndexError, TypeError):
+            print(f"Warning: Missing ROI data for event {i+1}, skipping...")
+            continue
         
         # Create a dictionary for easy lookup: {roi_index: (p1, p2)}
         locations_dict = {loc[0]: (loc[1], loc[2]) for loc in locations}
@@ -437,4 +465,3 @@ if variables["n_frames"] != "NA" and variables["time_stamps"] != "NA" and variab
     print(f"⚠️ Warning: Number of frames ({variables['n_frames']}) does not match length of time stamps ({len(variables['time_stamps'])}).")
 
 print("\n[OK] Files saved successfully.")
-
