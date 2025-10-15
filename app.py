@@ -238,7 +238,6 @@ class MainWindow(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     
-    # Apply consistent dark theme
     qdarktheme.setup_theme()
     
     window = MainWindow()
