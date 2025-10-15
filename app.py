@@ -242,5 +242,5 @@ if __name__ == "__main__":
     qdarktheme.setup_theme()
     
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())

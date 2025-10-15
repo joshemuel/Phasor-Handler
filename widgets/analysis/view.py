@@ -1750,6 +1750,16 @@ class AnalysisWidget(QWidget):
             # Clear only the current interactive selection and trace; keep saved ROIs visible
             # Also clear editing state
             self._editing_roi_index = None
+            
+            # Clear ROI list selection
+            if hasattr(self, 'roi_list_component'):
+                self.roi_list_component.clear_editing_state()
+                roi_list_widget = self.roi_list_component.get_list_widget()
+                if roi_list_widget:
+                    roi_list_widget.setCurrentRow(-1)
+                    roi_list_widget.clearSelection()
+                print("Cleared ROI list selection (Escape key)")
+            
             try:
                 if hasattr(self, 'roi_tool') and self.roi_tool is not None and hasattr(self.roi_tool, 'clear_selection'):
                     self.roi_tool.clear_selection()

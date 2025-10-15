@@ -250,8 +250,7 @@ class CircleRoiTool(QObject):
 
         if et == event.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.LeftButton and self._in_draw_rect(event.position()):
-                # LEFT CLICK: ALWAYS creates a new ROI (never edits existing ones)
-                # This clears any current selection and starts fresh drawing
+                # Emit signal that ROI drawing has started
                 self.roiDrawingStarted.emit()
                 
                 # Clear any existing bbox to ensure we're starting fresh
@@ -264,6 +263,15 @@ class CircleRoiTool(QObject):
                 self._dragging = True
                 self._rotation_angle = 0.0
                 self._interaction_mode = 'translate'
+                
+                # Clear any ROI selection in the list widget to prevent unintentional editing
+                if hasattr(self.parent(), 'roi_list_component'):
+                    self.parent().roi_list_component.clear_editing_state()
+                    roi_list_widget = self.parent().roi_list_component.get_list_widget()
+                    if roi_list_widget:
+                        roi_list_widget.setCurrentRow(-1)  # Properly deselect by setting to invalid row
+                        roi_list_widget.clearSelection()
+                    print("Cleared ROI list selection - starting new ROI")
                 
                 self._update_bbox_from_points()
                 self._paint_overlay()
@@ -640,7 +648,7 @@ class CircleRoiTool(QObject):
             mode_text = f"Mode: {self._interaction_mode.title()} (Y to toggle)"
             painter.setPen(QPen(QColor(255, 255, 255, 200)))
             font = QFont()
-            font.setPointSize(6)
+            font.setPointSize(10)
             font.setBold(True)
             painter.setFont(font)
             painter.drawText(10, 25, mode_text)

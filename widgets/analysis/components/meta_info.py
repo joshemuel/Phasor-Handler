@@ -46,7 +46,7 @@ class MetadataViewer(QDialog):
                 font-size: 14px;
                 font-weight: bold;
                 padding: 10px;
-                background-color: #2a7d4e;
+                background-color: #2E4A67;
                 border: 1px solid #ddd;
                 border-radius: 5px;
             }
