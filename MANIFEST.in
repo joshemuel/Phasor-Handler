@@ -1,0 +1,8 @@
+include README.md
+include LICENSE.md
+include CONTRIBUTING.md
+include environment.yml
+recursive-include img *.ico *.svg
+recursive-include phasor_handler *.py
+global-exclude __pycache__
+global-exclude *.py[co]

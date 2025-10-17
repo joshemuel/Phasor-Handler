@@ -738,7 +738,7 @@ class AnalysisWidget(QWidget):
         from PyQt6.QtGui import QImage, QPixmap
         import numpy as np
         import matplotlib
-        from tools import misc
+        from ...tools import misc
 
         # frame_idx uses widget slider
         frame_idx = int(self.tif_slider.value())

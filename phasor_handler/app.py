@@ -8,11 +8,11 @@ from PyQt6.QtGui import QFileSystemModel, QIcon
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
 
-from widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
-from tools import misc
-from workers import RegistrationWorker
-from models.dir_manager import DirManager
-from themes import apply_dark_theme
+from .widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
+from .tools import misc
+from .workers import RegistrationWorker
+from .models.dir_manager import DirManager
+from .themes import apply_dark_theme
 import qdarktheme
 
 class MainWindow(QMainWindow):
@@ -235,11 +235,15 @@ class MainWindow(QMainWindow):
         self._reg_worker.error.connect(lambda e: self.reg_log.append(f"ERROR: {e}"))
         self._reg_thread.start()
 
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
-    
-    qdarktheme.setup_theme()
-    
+    try:
+        qdarktheme.setup_theme("auto")  # or your own apply_dark_theme()
+    except Exception:
+        pass  # fall back to default if theme package missing
     window = MainWindow()
     window.showMaximized()
     sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

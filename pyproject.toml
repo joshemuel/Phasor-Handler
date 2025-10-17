@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phasor-handler"
+version = "2.2.0"
+authors = [{ name = "Josia Shemuel", email = "joshemuel@users.noreply.github.com" }]
+description = "A PyQt6 GUI toolbox for processing two-photon phasor imaging data"
+readme = "README.md"
+requires-python = ">=3.9.23,<3.10"
+keywords = ["two-photon", "phasor", "imaging", "calcium", "neuroscience", "suite2p"]
+license = { file = "LICENSE.md" }
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Topic :: Scientific/Engineering :: Image Processing",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Operating System :: Microsoft :: Windows",
+  "Environment :: X11 Applications :: Qt",
+]
+dependencies = [
+  "PyQt6>=6.4.0",
+  "numpy>=1.21.0,<2.0.0",
+  "matplotlib>=3.5.0",
+  "tifffile>=2021.11.2",
+  "pyyaml>=6.0",
+  "suite2p>=0.14.0",
+  "pyqtdarktheme>=1.0.0",
+  "Pillow>=9.0.0",
+  "scikit-image>=0.19.0",
+  "scipy>=1.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0.0",
+  "black>=22.0.0",
+  "flake8>=4.0.0",
+]
+
+[project.gui-scripts]
+phasor-handler = "phasor_handler.app:main"
+
+[project.scripts]
+phasor-handler-debug = "phasor_handler.app:main"
+
+[project.urls]
+Homepage = "https://github.com/joshemuel/Phasor-Handler"
+Repository = "https://github.com/joshemuel/Phasor-Handler"
+Issues = "https://github.com/joshemuel/Phasor-Handler/issues"
+
+[tool.setuptools]
+packages = [
+  "phasor_handler",
+  "phasor_handler.widgets",
+  "phasor_handler.widgets.analysis",
+  "phasor_handler.widgets.analysis.components",
+  "phasor_handler.workers",
+  "phasor_handler.models",
+  "phasor_handler.scripts",
+  "phasor_handler.tools",
+  "phasor_handler.themes",
+]
+
+[tool.setuptools.package-data]
+phasor_handler = [
+  "img/*.ico",
+  "img/icons/*.svg",
+]
