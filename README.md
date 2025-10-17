@@ -1,4 +1,4 @@
-# Phasor-Handler v2.0 (Windows)
+# Phasor-Handler (Windows)
 
 Phasor Handler is a toolbox for processing raw two-photon phasor imaging data: **convert → register → explore → extract calcium traces**.  
 It provides a PyQt6 GUI for viewing registered or raw stacks (Ch1/Ch2), z-projections (std/max/mean), drawing/storing ROIs, overlaying stimulated ROIs from metadata, and exporting ROI traces.
