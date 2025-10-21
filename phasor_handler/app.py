@@ -1,4 +1,5 @@
 import sys
+import os
 import subprocess
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QFileDialog, QMessageBox, 
@@ -9,8 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
 
 from .widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
-from .tools import misc
-from .workers import RegistrationWorker
+from .workers import RegistrationWorker, ConversionWorker
 from .models.dir_manager import DirManager
 from .themes import apply_dark_theme
 import qdarktheme
@@ -144,43 +144,45 @@ class MainWindow(QMainWindow):
             return
 
         mode = self.mode_combo.currentText().lower()
+        
+        # Find the run button and disable it
+        run_btn = None
+        for w in self.findChildren(QPushButton):
+            if w.text().startswith("Run Conversion"):
+                run_btn = w
+                break
+        if run_btn:
+            run_btn.setEnabled(False)
+        
         self.conv_log.clear()
-        self.conv_log.append(f"--- Starting Batch Conversion in '{mode}' mode ---\n")
-        for i, conv_dir in enumerate(self.selected_dirs):
-            self.conv_log.append(f"Processing ({i+1}/{len(self.selected_dirs)}): {conv_dir}")
-            # 1. Run convert.py
-            cmd = [sys.executable, "scripts/convert.py", str(conv_dir), "--mode", mode]
-            try:
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-                for line in proc.stdout:
-                    self.conv_log.append(line.rstrip())
-                    QApplication.processEvents()
-                retcode = proc.wait()
-                if retcode != 0:
-                    self.conv_log.append(f"FAILED to convert: {conv_dir}\n")
-                else:
-                    self.conv_log.append("--- Conversion done ---\n")
-            except Exception as e:
-                self.conv_log.append(f"FAILED to convert: {conv_dir} (Error: {e})\n")
-                continue
-
-            # 2. Run meta_reader.py
-            meta_cmd = [sys.executable, "scripts/meta_reader.py", "-f", str(conv_dir)]
-            self.conv_log.append(f"\n[meta_reader] Reading metadata for: {conv_dir}")
-            try:
-                meta_proc = subprocess.Popen(meta_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-                for line in meta_proc.stdout:
-                    self.conv_log.append(line.rstrip())
-                    QApplication.processEvents()
-                meta_retcode = meta_proc.wait()
-                if meta_retcode != 0:
-                    self.conv_log.append(f"FAILED to read metadata: {conv_dir}\n")
-                else:
-                    self.conv_log.append("--- Metadata read done ---\n")
-            except Exception as e:
-                self.conv_log.append(f"FAILED to read metadata: {conv_dir} (Error: {e})\n")
-                continue
-        self.conv_log.append("--- Batch Conversion Finished ---")
+        
+        # Create thread and worker
+        self._conv_thread = QThread()
+        self._conv_worker = ConversionWorker(self.selected_dirs.copy(), mode)
+        self._conv_worker.moveToThread(self._conv_thread)
+        
+        # Connect signals
+        self._conv_thread.started.connect(self._conv_worker.run)
+        self._conv_worker.log.connect(lambda s: (self.conv_log.append(s), QApplication.processEvents()))
+        
+        def _on_finished():
+            if run_btn:
+                run_btn.setEnabled(True)
+            self._conv_thread.quit()
+            self._conv_thread.wait()
+            self._conv_worker.deleteLater()
+            del self._conv_worker
+            del self._conv_thread
+        
+        def _on_error(err_msg):
+            self.conv_log.append(f"[ERROR] {err_msg}")
+            QMessageBox.critical(self, "Conversion Error", f"An error occurred:\n{err_msg}")
+        
+        self._conv_worker.finished.connect(_on_finished)
+        self._conv_worker.error.connect(_on_error)
+        
+        # Start the thread
+        self._conv_thread.start()
 
     def run_registration_script(self):
         # Gather inputs and start a background worker so the GUI doesn't block

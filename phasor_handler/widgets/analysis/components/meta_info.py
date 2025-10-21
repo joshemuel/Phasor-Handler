@@ -7,13 +7,12 @@ in a formatted, user-friendly way.
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton,
-    QScrollArea, QWidget, QFrame, QGridLayout, QTabWidget, QSplitter,
-    QGroupBox, QTreeWidget, QTreeWidgetItem, QHeaderView
+    QScrollArea, QWidget, QFrame, QGridLayout, QTabWidget, QGroupBox, 
+    QTreeWidget, QTreeWidgetItem, QHeaderView
 )
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QFont, QTextOption
+from PyQt6.QtGui import QFont
 import json
-import datetime
 
 
 class MetadataViewer(QDialog):
@@ -248,9 +247,23 @@ class MetadataViewer(QDialog):
                     display_value = f"{hour:02d}:{minute:02d}:{second:02d}"
                     key = "Local Time"
                 elif isinstance(value, list) and len(value) > 0:
-                    interval = (sum([value[i+1] - value[i] for i in range(len(value)-1)])/(len(value)-1))/1000
-                    start_display = "0" if value[0] == 0 else f"{value[0]/1000:.3f}"
-                    display_value = f"From {start_display} to {value[-1]/1000:.3f} seconds with an average interval of {interval:.3f} seconds"
+                    try:
+                        # Try numeric calculation first (for millisecond timestamps)
+                        interval = (sum([value[i+1] - value[i] for i in range(len(value)-1)])/(len(value)-1))/1000
+                        start_display = "0" if value[0] == 0 else f"{value[0]/1000:.3f}"
+                        display_value = f"From {start_display} to {value[-1]/1000:.3f} seconds with an average interval of {interval:.3f} seconds"
+                    except TypeError:
+                        # Handle string timestamps (e.g., "2025-10-17 01:27:48.063")
+                        from datetime import datetime
+                        try:
+                            timestamps = [datetime.fromisoformat(ts) for ts in value]
+                            intervals = [(timestamps[i+1] - timestamps[i]).total_seconds() for i in range(len(timestamps)-1)]
+                            interval = sum(intervals) / len(intervals)
+                            start_time = (timestamps[0] - timestamps[0]).total_seconds()  # Always 0
+                            end_time = (timestamps[-1] - timestamps[0]).total_seconds()
+                            display_value = f"From {start_time:.3f} to {end_time:.3f} seconds with an average interval of {interval:.3f} seconds"
+                        except (ValueError, AttributeError):
+                            display_value = f"List with {len(value)} items"
                 else:
                     display_value = str(value)
                 self.add_info_row(self.timing_layout, row, key.replace('_', ' ').title(), 

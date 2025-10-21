@@ -17,6 +17,7 @@ import sys
 from typing import List, Dict
 import numpy as np
 import tifffile
+import cv2
 
 
 def natural_key(s: str):
@@ -24,13 +25,33 @@ def natural_key(s: str):
     return [int(text) if text.isdigit() else text.lower()
             for text in re.split(r'(\d+)', s)]
 
-
 def list_channel_files(folder_path: str, prefix: str, ext: str = ".npy") -> List[str]:
     """Finds all files in a folder with a given prefix and extension."""
-    files = [fn for fn in os.listdir(folder_path)
-             if fn.startswith(prefix) and fn.endswith(ext)]
-    files.sort(key=natural_key)
-    return [os.path.join(folder_path, fn) for fn in files]
+    if ext == ".npy":
+        files = [fn for fn in os.listdir(folder_path)
+                if fn.startswith(prefix) and fn.endswith(ext)]
+        files.sort(key=natural_key)
+        return [os.path.join(folder_path, fn) for fn in files]
+    elif ext == ".tif" or ext == ".tiff":
+        matching_files = []
+        for root, _, filenames in os.walk(folder_path):
+            # Get the directory name
+            dir_name = os.path.basename(root)
+
+            if dir_name.startswith(prefix):
+                for root, _, filenames in os.walk(root):
+                    files = [fn for fn in filenames
+                        if fn.endswith(".tif") or fn.endswith(".tiff")]
+                if files:
+                    pre_folder = re.search(r'.+\\(.+)\\.+$', root)
+                    print(f"Match for prefix '{prefix}' in directory: {pre_folder.group(1)}")
+                files.sort(key=natural_key)
+                matching_files.extend([os.path.join(root, fn) for fn in files])
+        
+        return matching_files
+    else:
+        raise ValueError(f"Unsupported extension: {ext}")
+            
 
 
 def load_and_concat(files: List[str]) -> np.ndarray:
@@ -71,14 +92,19 @@ def write_tiff(out_path: str, data: np.ndarray, force_dtype: str = "uint16"):
 
 
 def process_single_folder(folder_path: str,
-                           ch0_prefix: str = "ImageData_Ch0",
-                           ch1_prefix: str = "ImageData_Ch1",
+                           source: str = "i3",
+                           ch0_prefix: str = None,
+                           ch1_prefix: str = None,
                            ext: str = ".npy",
                            mode: str = "interleaved",
                            dtype: str = "uint16"):
     """Processes .npy files in a single directory."""
     if not os.path.isdir(folder_path):
         raise NotADirectoryError(f"Input path is not a valid directory: {folder_path}")
+
+    ch0_prefix = "ImageData_Ch0" if source == "i3" else "CellVideo1"
+    ch1_prefix = "ImageData_Ch1" if source == "i3" else "CellVideo2"
+    ext = ".npy" if source == "i3" else ".tiff"
 
     ch0_files = list_channel_files(folder_path, ch0_prefix, ext)
     ch1_files = list_channel_files(folder_path, ch1_prefix, ext)
@@ -89,11 +115,18 @@ def process_single_folder(folder_path: str,
 
     ch_data: Dict[str, np.ndarray] = {}
     if ch0_files:
-        ch0_result = load_and_concat(ch0_files)
+        if ext == ".tif" or ext == ".tiff":
+            ch0_result = tifffile.imread(ch0_files)
+        else:
+            ch0_result = load_and_concat(ch0_files)
+
         if ch0_result is not None:
             ch_data["Ch0"] = ch0_result
     if ch1_files:
-        ch1_result = load_and_concat(ch1_files)
+        if ext == ".tif" or ext == ".tiff":
+            ch1_result = tifffile.imread(ch1_files)
+        else:
+            ch1_result = load_and_concat(ch1_files)
         if ch1_result is not None:
             ch_data["Ch1"] = ch1_result
 
@@ -137,6 +170,8 @@ def process_single_folder(folder_path: str,
 def main():
     p = argparse.ArgumentParser(description="Convert .npy stacks from a single Phasor directory to a TIFF.")
     p.add_argument("directory", help="Path to the single 'StreamingPhasorCapture*' folder containing .npy files.")
+    p.add_argument("-s", "--source", choices=["i3", "mini"], 
+                   help="Microscope source type (required).")
     p.add_argument("--mode", choices=["interleaved", "block"], default="interleaved",
                    help="Channel arrangement. Default is 'interleaved'.")
     args = p.parse_args()
@@ -144,7 +179,8 @@ def main():
     try:
         process_single_folder(
             folder_path=os.path.abspath(args.directory),
-            mode=args.mode
+            mode=args.mode,
+            source=args.source
         )
     except Exception as e:
         print(f"[FATAL] {e}", file=sys.stderr)
