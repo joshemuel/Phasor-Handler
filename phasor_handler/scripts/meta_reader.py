@@ -461,15 +461,21 @@ def process_mini2p_folder(folder_path: str):
     else:
         day = month = year = hour = minute = second = "NA"
     
-    # Count frames from timing data
+    # Count frames from timing data and detect channels
     n_frames_cell = 0
     n_frames_mice = 0
     time_stamps = []
+    has_cha = False
+    has_chb = False
     
     for video_name in ['CellVideo1', 'CellVideo2']:
         if video_name in tdms_data:
             for channel in ['CHA', 'CHB']:
                 if channel in tdms_data[video_name]:
+                    if channel == 'CHA':
+                        has_cha = True
+                    if channel == 'CHB':
+                        has_chb = True
                     n_frames_cell = max(n_frames_cell, len(tdms_data[video_name][channel]))
                     # Extract timestamps if available
                     if 'Time' in tdms_data[video_name][channel].columns:
@@ -481,7 +487,22 @@ def process_mini2p_folder(folder_path: str):
         if video_name in tdms_data:
             for channel in ['CHA', 'CHB']:
                 if channel in tdms_data[video_name]:
+                    if channel == 'CHA':
+                        has_cha = True
+                    if channel == 'CHB':
+                        has_chb = True
                     n_frames_mice = max(n_frames_mice, len(tdms_data[video_name][channel]))
+    
+    # Determine channel configuration
+    green_channel = "NA"
+    red_channel = "NA"
+    blue_channel = "NA"
+    
+    if has_cha and has_chb:
+        green_channel = 1
+        red_channel = 2
+    elif has_cha:
+        green_channel = 1
     
     # Build variables dictionary
     variables = {
@@ -498,10 +519,10 @@ def process_mini2p_folder(folder_path: str):
         "pmt_voltage": safe_extract(lambda: image_info.get('PMT(V)', 'NA')),
         "scan_speed_hz": safe_extract(lambda: image_info.get('Scan speed(Hz)', 'NA')),
         "image_channel": safe_extract(lambda: image_info.get('Image channel', 'NA')),
-        "Elapsed_time_offset": 0,  # Mini2P uses absolute timestamps
-        "green_channel": "NA",  # Not applicable for Mini2P
-        "red_channel": "NA",
-        "blue_channel": "NA",
+        "Elapsed_time_offset": 0,  
+        "green_channel": green_channel,  
+        "red_channel": red_channel,
+        "blue_channel": blue_channel,
         "X_start_position": "NA",
         "Y_start_position": "NA",
         "Z_start_position": "NA",
