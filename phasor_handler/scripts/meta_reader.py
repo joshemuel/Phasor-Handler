@@ -1,6 +1,14 @@
+#!/usr/bin/env python3
+"""
+meta_reader.py
+
+Extracts metadata from microscopy data directories.
+Supports both 3i (Intelligent Imaging Innovations) and Mini2P microscopes.
+"""
+
 import yaml
-import numpy as np
 import os
+import sys
 import xml.etree.ElementTree as ET
 import re
 import csv
@@ -8,13 +16,18 @@ import argparse
 from pathlib import Path
 import pickle
 import json
+import pandas as pd
 
-# -------------- INPUTS --------------
-parser = argparse.ArgumentParser(description='Process a folder of .yaml files.')
-parser.add_argument('-f', '--folder_path', required=True, type=str, help='Path to the folder containing .yaml files')
-args = parser.parse_args()
-
-folder_path = args.folder_path
+# -------------- CLASS --------------
+class DataFrameDict(dict):
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(key)
+    
+    def __setattr__(self, key, value):
+        self[key] = value
 
 # ------------- FUNCTIONS -------------
 def open_overwrite(path, *args, **kwargs):
@@ -223,73 +236,53 @@ def extract_roi_info(events):
         all_events_roi_data.append(event_info)
     return all_events_roi_data
 
-# Read all the files in the folder using yaml
 
-data = {}
-for filename in os.listdir(folder_path):
-    if filename.endswith(".yaml"):
-        if filename in ["ImageRecord.yaml", "ChannelRecord.yaml"]:
-            with open(os.path.join(folder_path, filename), 'r') as file:
+def process_i3_folder(folder_path: str):
+    """
+    Process 3i microscope data from a folder containing .yaml files.
+    
+    Args:
+        folder_path: Path to the folder containing .yaml files
+    """
+    # Read all the files in the folder using yaml
+    data = {}
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".yaml"):
+            if filename in ["ImageRecord.yaml", "ChannelRecord.yaml"]:
+                with open(os.path.join(folder_path, filename), 'r') as file:
+                    try:
+                        classes = load_classes(os.path.join(folder_path, filename))
+                        data[filename] = classes
+                    except yaml.YAMLError as e:
+                        print(f"Error reading {filename}: {e}")
+            elif filename == "AnnotationRecord.yaml":
                 try:
-                    classes = load_classes(os.path.join(folder_path, filename))
-                    data[filename] = classes
-                except yaml.YAMLError as e:
-                    print(f"Error reading {filename}: {e}")
-        elif filename == "AnnotationRecord.yaml":
-            try:
-                content = get_organized_experiment_data(os.path.join(folder_path, filename))
-                data[filename] = content
-            except yaml.YAMLError as e:
-                print(f"Error reading {filename}: {e}")
-        else:
-            with open(os.path.join(folder_path, filename), 'r') as file:
-                try:
-                    content = yaml.safe_load(file)
+                    content = get_organized_experiment_data(os.path.join(folder_path, filename))
                     data[filename] = content
                 except yaml.YAMLError as e:
                     print(f"Error reading {filename}: {e}")
+            else:
+                with open(os.path.join(folder_path, filename), 'r') as file:
+                    try:
+                        content = yaml.safe_load(file)
+                        data[filename] = content
+                    except yaml.YAMLError as e:
+                        print(f"Error reading {filename}: {e}")
 
-# Extract date/time values with error handling
-try:
-    day = data["ImageRecord.yaml"]["CImageRecord70"]["mDay"]
-except (KeyError, TypeError):
-    day = "NA"
+    base_path = data.get("ImageRecord.yaml", {}).get("CImageRecord70", {})
+    fields = ["mDay", "mMonth", "mYear", "mHour", "mMinute", "mSecond"]
+    day, month, year, hour, minute, second = (base_path.get(field, "NA") for field in fields)
 
-try:
-    month = data["ImageRecord.yaml"]["CImageRecord70"]["mMonth"]
-except (KeyError, TypeError):
-    month = "NA"
+    # Helper function to safely extract values
+    def safe_extract(func, default="NA"):
+        """Safely execute a function and return default if it fails."""
+        try:
+            result = func()
+            return result if result is not None else default
+        except (KeyError, TypeError, IndexError, AttributeError, ValueError):
+            return default
 
-try:
-    year = data["ImageRecord.yaml"]["CImageRecord70"]["mYear"]
-except (KeyError, TypeError):
-    year = "NA"
-
-try:
-    hour = data["ImageRecord.yaml"]["CImageRecord70"]["mHour"]
-except (KeyError, TypeError):
-    hour = "NA"
-
-try:
-    minute = data["ImageRecord.yaml"]["CImageRecord70"]["mMinute"]
-except (KeyError, TypeError):
-    minute = "NA"
-
-try:
-    second = data["ImageRecord.yaml"]["CImageRecord70"]["mSecond"]
-except (KeyError, TypeError):
-    second = "NA"
-
-# Helper function to safely extract values
-def safe_extract(func, default="NA"):
-    """Safely execute a function and return default if it fails."""
-    try:
-        result = func()
-        return result if result is not None else default
-    except (KeyError, TypeError, IndexError, AttributeError, ValueError):
-        return default
-
-variables = {
+    variables = {
     "device_name": safe_extract(lambda: parse_stimulation_xml(data["AnnotationRecord.yaml"]["stimulation_events"][0]["stimulation_data"]["mXML"])["device_name"] if data["AnnotationRecord.yaml"]["stimulation_events"] else "NA"),
     "n_frames": safe_extract(lambda: data["ElapsedTimes.yaml"]["theElapsedTimes"][0]),
     "pixel_size": safe_extract(lambda: data["ImageRecord.yaml"]["CLensDef70"]["mMicronPerPixel"]),
@@ -344,124 +337,243 @@ variables = {
          tuple(roi_data.get('StructArrayValues', [])[3:6])) 
         for roi_id, roi_data in data["AnnotationRecord.yaml"]["initial_rois"].items()
     ], [])
-}
+    }
 
-# Validate that list lengths match stimulation_events count
-if variables['stimulation_events'] > 0:
-    list_vars = ['stimulation_timeframes', 'stimulation_ms', 'duration_ms', 
-                 'repetitions', 'duty_cycle', 'stimulated_rois', 
-                 'stimulated_roi_powers', 'stimulated_roi_location']
-    
-    for var_name in list_vars:
-        var_value = variables[var_name]
-        if isinstance(var_value, list) and len(var_value) != variables['stimulation_events']:
-            print(f"⚠️ Warning: {var_name} has {len(var_value)} entries but {variables['stimulation_events']} events expected.")
-
-print("Saving experiment_summary.csv...")
-with open_overwrite(Path(folder_path) / 'experiment_summary.csv', 'w', newline='', encoding='utf-8') as f:
-    writer = csv.writer(f)
-    writer.writerow(['Parameter', 'Value'])  # Write header
-    
-    # Loop through the dictionary and save single-value items
-    for key, value in variables.items():
-        if not isinstance(value, list) and not isinstance(value, np.ndarray):
-            writer.writerow([key, value])
-
-print("Saving stimulation_events.csv...")
-# Define the headers for our events file
-event_headers = [
-    'event_index', 
-    'timepoint_frame', 
-    'timepoint_ms', 
-    'duration_ms', 
-    'repetitions', 
-    'duty_cycle',
-    'stimulated_rois'
-]
-
-with open_overwrite(Path(folder_path) / 'stimulation_events.csv', 'w', newline='', encoding='utf-8') as f:
-    writer = csv.DictWriter(f, fieldnames=event_headers)
-    writer.writeheader()
-    
-    # Loop through each event to create a row
-    for i in range(variables['stimulation_events']):
-        # Helper function to safely get list item or return 'NA'
-        def safe_list_get(lst, index, default='NA'):
-            try:
-                return lst[index] if index < len(lst) else default
-            except (IndexError, TypeError):
-                return default
+    # Validate that list lengths match stimulation_events count
+    if variables['stimulation_events'] > 0:
+        list_vars = ['stimulation_timeframes', 'stimulation_ms', 'duration_ms', 
+                     'repetitions', 'duty_cycle', 'stimulated_rois', 
+                     'stimulated_roi_powers', 'stimulated_roi_location']
         
-        writer.writerow({
-            'event_index': i + 1,
-            'timepoint_frame': safe_list_get(variables['stimulation_timeframes'], i),
-            'timepoint_ms': safe_list_get(variables['stimulation_ms'], i),
-            'duration_ms': safe_list_get(variables['duration_ms'], i),
-            'repetitions': safe_list_get(variables['repetitions'], i),
-            'duty_cycle': safe_list_get(variables['duty_cycle'], i),
-            'stimulated_rois': safe_list_get(variables['stimulated_rois'], i)
-        })
+        for var_name in list_vars:
+            var_value = variables[var_name]
+            if isinstance(var_value, list) and len(var_value) != variables['stimulation_events']:
+                print(f"⚠️ Warning: {var_name} has {len(var_value)} entries but {variables['stimulation_events']} events expected.")
 
-# --- 3. Save the Detailed ROI Data ---
-print("Saving roi_details.csv...")
-roi_headers = [
-    'event_index',
-    'roi_index',
-    'target_power',
-    'corner_1_x',
-    'corner_1_y',
-    'corner_1_z',
-    'corner_2_x',
-    'corner_2_y',
-    'corner_2_z'
-]
+    with open(Path(folder_path) / 'experiment_summary.pkl', 'wb') as f:
+        # 'wb' is used for writing in binary mode
+        pickle.dump(variables, f)
 
-with open_overwrite(Path(folder_path) / 'roi_details.csv', 'w', newline='', encoding='utf-8') as f:
-    writer = csv.DictWriter(f, fieldnames=roi_headers)
-    writer.writeheader()
+    # Output a json file 
+    with open_overwrite(Path(folder_path) / 'experiment_summary.json', 'w', encoding='utf-8') as f:
+        json.dump(variables, f, indent=4)
+
+    print(f"JSON file and Pickle file saved to {folder_path}")
+
+    if variables["Elapsed_time_offset"] != "NA" and variables["Elapsed_time_offset"] != 0:   
+        print(f"⚠️ Warning: Elapsed time offset is {variables['Elapsed_time_offset']} ms, not zero as expected.")
+    if variables["n_frames"] != "NA" and variables["time_stamps"] != "NA" and variables["n_frames"] != len(variables["time_stamps"]):
+        print(f"⚠️ Warning: Number of frames ({variables['n_frames']}) does not match length of time stamps ({len(variables['time_stamps'])}).")
+
+    print("\n[OK] Files saved successfully.")
+
+
+def process_mini2p_folder(folder_path: str):
+    """
+    Process Mini2P microscope data from a folder containing .tdms files.
     
-    # Nested loop: outer loop for events, inner loop for ROIs within that event
-    for i in range(variables['stimulation_events']):
-        # Safely get the power and location data for the current event
+    Args:
+        folder_path: Path to the folder containing subfolders with .tdms files
+    """
+    try:
+        import nptdms
+        import pandas as pd
+    except ImportError as e:
+        print(f"[ERROR] Required package is missing: {e}")
+        print("Install with: pip install nptdms pandas")
+        sys.exit(1)
+    
+    print(f"[INFO] Processing Mini2P data from: {folder_path}")
+    
+    # Helper function to safely extract values
+    def safe_extract(func, default="NA"):
+        """Safely execute a function and return default if it fails."""
         try:
-            powers = variables['stimulated_roi_powers'][i] if i < len(variables['stimulated_roi_powers']) else []
-            locations = variables['stimulated_roi_location'][i] if i < len(variables['stimulated_roi_location']) else []
-        except (IndexError, TypeError):
-            print(f"Warning: Missing ROI data for event {i+1}, skipping...")
+            result = func()
+            return result if result is not None else default
+        except (KeyError, TypeError, IndexError, AttributeError, ValueError):
+            return default
+    
+    # Collect all subdirectories and TDMS files
+    folders = {}
+    path_df = {}
+    for subdir in os.listdir(folder_path):
+        subdir_path = os.path.join(folder_path, subdir)
+        if os.path.isdir(subdir_path):
+            folders[subdir] = subdir_path
+            tdms_files = [os.path.join(subdir_path, f) for f in os.listdir(subdir_path) if f.endswith('.tdms')]
+            if tdms_files:
+                path_df[subdir] = tdms_files
+    
+    # Load TDMS data into nested dict structure
+    tdms_data = {}
+    for folder_name, tdms_files in path_df.items():
+        if folder_name == "SyncInformation":
             continue
         
-        # Create a dictionary for easy lookup: {roi_index: (p1, p2)}
-        locations_dict = {loc[0]: (loc[1], loc[2]) for loc in locations}
+        if not tdms_files:
+            continue
+            
+        tdms_file_path = tdms_files[0]
+        try:
+            tdms_file = nptdms.TdmsFile.read(tdms_file_path)
+            print(f"[INFO] Loaded {folder_name}")
+            
+            tdms_data[folder_name] = {}
+            for group in tdms_file.groups():
+                group_data = {}
+                for channel in group.channels():
+                    group_data[channel.name] = channel[:]
+                
+                # Convert to pandas DataFrame for easier manipulation
+                if group_data:
+                    tdms_data[folder_name][group.name] = pd.DataFrame(group_data)
+                    
+        except Exception as e:
+            print(f"[WARN] Error reading {tdms_file_path}: {e}")
+    
+    # Extract metadata from the first CellVideo (if available)
+    image_info = {}
+    if 'CellVideo1' in tdms_data and 'Image_Info' in tdms_data['CellVideo1']:
+        info_df = tdms_data['CellVideo1']['Image_Info']
+        for _, row in info_df.iterrows():
+            image_info[row['Item']] = row['Value']
+    elif 'CellVideo2' in tdms_data and 'Image_Info' in tdms_data['CellVideo2']:
+        info_df = tdms_data['CellVideo2']['Image_Info']
+        for _, row in info_df.iterrows():
+            image_info[row['Item']] = row['Value']
+    
+    # Parse timestamp from image info
+    import datetime
+    timestamp_str = safe_extract(lambda: image_info.get('Image time', 'NA'))
+    if timestamp_str != 'NA':
+        try:
+            # Parse format like "10/16/2025 11:19:54 PM"
+            dt = datetime.datetime.strptime(timestamp_str, "%m/%d/%Y %I:%M:%S %p")
+            day = dt.day
+            month = dt.month
+            year = dt.year
+            hour = dt.hour
+            minute = dt.minute
+            second = dt.second
+        except:
+            day = month = year = hour = minute = second = "NA"
+    else:
+        day = month = year = hour = minute = second = "NA"
+    
+    # Count frames from timing data
+    n_frames_cell = 0
+    n_frames_mice = 0
+    time_stamps = []
+    
+    for video_name in ['CellVideo1', 'CellVideo2']:
+        if video_name in tdms_data:
+            for channel in ['CHA', 'CHB']:
+                if channel in tdms_data[video_name]:
+                    n_frames_cell = max(n_frames_cell, len(tdms_data[video_name][channel]))
+                    # Extract timestamps if available
+                    if 'Time' in tdms_data[video_name][channel].columns:
+                        time_col = tdms_data[video_name][channel]['Time']
+                        if len(time_col) > len(time_stamps):
+                            time_stamps = time_col.tolist()
+    
+    for video_name in ['MiceVideo1', 'MiceVideo2']:
+        if video_name in tdms_data:
+            for channel in ['CHA', 'CHB']:
+                if channel in tdms_data[video_name]:
+                    n_frames_mice = max(n_frames_mice, len(tdms_data[video_name][channel]))
+    
+    # Build variables dictionary
+    variables = {
+        "device_name": "Mini2P",
+        "n_frames": safe_extract(lambda: n_frames_cell if n_frames_cell > 0 else n_frames_mice, 0),
+        "n_frames_cell": n_frames_cell,
+        "n_frames_mice": n_frames_mice,
+        "pixel_size": safe_extract(lambda: image_info.get('Image size_Pixel', 'NA')),
+        "height": safe_extract(lambda: int(image_info.get('Image size_Line', 'NA'))),
+        "width": safe_extract(lambda: int(image_info.get('Image size_Pixel', 'NA'))),
+        "FOV_size": "NA",  # Mini2P doesn't provide micron measurements in TDMS
+        "zoom": safe_extract(lambda: image_info.get('Zoom', 'NA')),
+        "laser_voltage": safe_extract(lambda: image_info.get('Laser(V)', 'NA')),
+        "pmt_voltage": safe_extract(lambda: image_info.get('PMT(V)', 'NA')),
+        "scan_speed_hz": safe_extract(lambda: image_info.get('Scan speed(Hz)', 'NA')),
+        "image_channel": safe_extract(lambda: image_info.get('Image channel', 'NA')),
+        "Elapsed_time_offset": 0,  # Mini2P uses absolute timestamps
+        "green_channel": "NA",  # Not applicable for Mini2P
+        "red_channel": "NA",
+        "blue_channel": "NA",
+        "X_start_position": "NA",
+        "Y_start_position": "NA",
+        "Z_start_position": "NA",
+        "day": day,
+        "month": month,
+        "year": year,
+        "hour": hour,
+        "minute": minute,
+        "second": second,
+        "stimulation_events": 0,  # Mini2P stimulation data would need separate processing
+        "repetitions": [],
+        "duty_cycle": [],
+        "stimulation_timeframes": [],
+        "stimulation_ms": [],
+        "duration_ms": [],
+        "stimulated_rois": [],
+        "stimulated_roi_powers": [],
+        "stimulated_roi_location": [],
+        "time_stamps": time_stamps,
+        "initial_roi_powers": [],
+        "initial_roi_location": [],
+        "data_folders": list(tdms_data.keys())
+    }
+    
+    # Save metadata
+    with open(Path(folder_path) / 'experiment_summary.pkl', 'wb') as f:
+        pickle.dump(variables, f)
+    
+    with open_overwrite(Path(folder_path) / 'experiment_summary.json', 'w', encoding='utf-8') as f:
+        json.dump(variables, f, indent=4)
+    
+    print(f"[OK] Mini2P metadata saved to {folder_path}")
+    print("\n[OK] Files saved successfully.")
 
-        # Loop through the list of tuples and unpack them directly
-        for roi_id, power in powers: 
-            corner1, corner2 = locations_dict.get(roi_id, ((None, None), (None, None)))
-            writer.writerow({
-                'event_index': i + 1,
-                'roi_index': roi_id,
-                'target_power': power,
-                'corner_1_x': corner1[0] if corner1 else np.nan,
-                'corner_1_y': corner1[1] if corner1 else np.nan,
-                'corner_1_z': corner1[2] if corner1 else np.nan,
-                'corner_2_x': corner2[0] if corner2 else np.nan,
-                'corner_2_y': corner2[1] if corner2 else np.nan,
-                'corner_2_z': corner2[2] if corner2 else np.nan
-            })
 
-with open(Path(folder_path) / 'experiment_summary.pkl', 'wb') as f:
-    # 'wb' is used for writing in binary mode
-    pickle.dump(variables, f)
+def main():
+    """Main entry point for the metadata extraction script."""
+    parser = argparse.ArgumentParser(
+        description='Extract metadata from microscopy data directories.'
+    )
+    parser.add_argument(
+        'directory',
+        help='Path to the folder containing microscopy data'
+    )
+    parser.add_argument(
+        '-s', '--source',
+        choices=["i3", "mini"],
+        required=True,
+        help="Microscope source type: 'i3' for 3i microscopes, 'mini' for Mini2P"
+    )
+    args = parser.parse_args()
 
-# Output a json file 
-with open_overwrite(Path(folder_path) / 'experiment_summary.json', 'w', encoding='utf-8') as f:
-    json.dump(variables, f, indent=4)
+    folder_path = os.path.abspath(args.directory)
+    
+    if not os.path.isdir(folder_path):
+        print(f"[ERROR] Directory not found: {folder_path}", file=sys.stderr)
+        sys.exit(1)
+    
+    try:
+        if args.source == "i3":
+            process_i3_folder(folder_path)
+        elif args.source == "mini":
+            process_mini2p_folder(folder_path)
+        else:
+            print(f"[ERROR] Unknown source type: {args.source}", file=sys.stderr)
+            sys.exit(1)
+    except Exception as e:
+        print(f"[FATAL] {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
-print(f"JSON file and Pickle file saved to {folder_path}")
 
-
-if variables["Elapsed_time_offset"] != "NA" and variables["Elapsed_time_offset"] != 0:   
-    print(f"⚠️ Warning: Elapsed time offset is {variables['Elapsed_time_offset']} ms, not zero as expected.")
-if variables["n_frames"] != "NA" and variables["time_stamps"] != "NA" and variables["n_frames"] != len(variables["time_stamps"]):
-    print(f"⚠️ Warning: Number of frames ({variables['n_frames']}) does not match length of time stamps ({len(variables['time_stamps'])}).")
-
-print("\n[OK] Files saved successfully.")
+if __name__ == "__main__":
+    main()

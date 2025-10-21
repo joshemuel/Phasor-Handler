@@ -6,7 +6,7 @@ for the analysis tab, including the reg_tif_label, image scaling with aspect rat
 preservation, and ROI tool integration.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy, QApplication
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QFont, QColor
 import numpy as np
@@ -26,21 +26,49 @@ class ImageViewWidget(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        
+        # Calculate screen-relative initial size
+        self._initial_min_width, self._initial_min_height = self._calculate_screen_relative_size()
+        
         self.setupUI()
         
         # Store references for image data
         self._current_image_np = None
         self._current_qimage = None
         
+    def _calculate_screen_relative_size(self):
+        """
+        Calculate initial minimum size based on screen dimensions.
+        Aims for ~40% of screen height and ~35% of screen width as a reasonable default.
+        """
+        try:
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geometry = screen.availableGeometry()
+                screen_width = screen_geometry.width()
+                screen_height = screen_geometry.height()
+                
+                # Calculate size as percentage of screen (with reasonable limits)
+                min_width = max(500, min(800, int(screen_width * 0.35)))
+                min_height = max(500, min(800, int(screen_height * 0.40)))
+                
+                print(f"DEBUG: Screen size: {screen_width}x{screen_height}, Initial widget size: {min_width}x{min_height}")
+                return min_width, min_height
+        except Exception as e:
+            print(f"DEBUG: Could not get screen size, using defaults: {e}")
+        
+        # Fallback to reasonable defaults if screen detection fails
+        return 600, 600
+        
     def setupUI(self):
         """Set up the UI components."""
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Create the main image display label
+        # Create the main image display label with screen-relative sizing
         self.reg_tif_label = QLabel("Select a directory to view registered images.")
         self.reg_tif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.reg_tif_label.setMinimumSize(700, 700)
+        self.reg_tif_label.setMinimumSize(self._initial_min_width, self._initial_min_height)
         self.reg_tif_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         layout.addWidget(self.reg_tif_label, 1)  # Give stretch factor of 1 to make it greedy
@@ -215,22 +243,59 @@ class ImageViewWidget(QWidget):
     def resize_for_new_image(self, new_width, new_height):
         """
         Resize the widget to accommodate a new image with different dimensions.
+        Uses screen-aware sizing to ensure the image fits well on any display.
         
         Args:
-            new_width: Width of the new image
-            new_height: Height of the new image
+            new_width: Width of the new image in pixels
+            new_height: Height of the new image in pixels
         """
         # Reset the size policy to allow proper resizing
         self.reg_tif_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
-        # Set a reasonable minimum size that accommodates different image sizes
-        # Use at least the original minimum size (700x629) or larger if needed
-        min_width = max(new_width + 40, 700)  # Ensure at least original width or larger
-        min_height = max(new_height + 40, 629)  # Ensure at least original height or larger
+        try:
+            # Get screen dimensions for adaptive sizing
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geometry = screen.availableGeometry()
+                max_available_width = int(screen_geometry.width() * 0.5) 
+                max_available_height = int(screen_geometry.height() * 0.6)
+            else:
+                max_available_width = 1000
+                max_available_height = 900
+        except Exception:
+            max_available_width = 1000
+            max_available_height = 900
         
-        # Cap at reasonable maximums to prevent huge widgets
-        min_width = min(min_width, 1200)
-        min_height = min(min_height, 1000)
+        # Calculate aspect ratio of the image
+        aspect_ratio = new_width / new_height if new_height > 0 else 1.0
+        
+        # Determine minimum size based on image dimensions and screen constraints
+        # Add some padding for UI elements (40px)
+        padding = 40
+        
+        # Start with image dimensions plus padding
+        desired_width = new_width + padding
+        desired_height = new_height + padding
+        
+        # Ensure minimum viable size (not too small)
+        min_viable_size = 400
+        desired_width = max(desired_width, min_viable_size)
+        desired_height = max(desired_height, min_viable_size)
+        
+        # Cap at screen-relative maximums to prevent overflow
+        if desired_width > max_available_width:
+            desired_width = max_available_width
+            # Maintain aspect ratio
+            desired_height = int(desired_width / aspect_ratio) + padding
+        
+        if desired_height > max_available_height:
+            desired_height = max_available_height
+            # Maintain aspect ratio
+            desired_width = int(desired_height * aspect_ratio) + padding
+        
+        # Ensure the widget can accommodate the image
+        min_width = max(min_viable_size, min(desired_width, max_available_width))
+        min_height = max(min_viable_size, min(desired_height, max_available_height))
         
         self.reg_tif_label.setMinimumSize(min_width, min_height)
         
@@ -238,7 +303,8 @@ class ImageViewWidget(QWidget):
         self.reg_tif_label.updateGeometry()
         self.update()
         
-        print(f"DEBUG: Resized widget for image {new_width}x{new_height} -> min size {min_width}x{min_height}")
+        print(f"DEBUG: Resized widget for image {new_width}x{new_height} (AR={aspect_ratio:.2f})")
+        print(f"DEBUG: -> Widget min size: {min_width}x{min_height}, Screen limits: {max_available_width}x{max_available_height}")
     
     def compute_draw_rect_for_label(self, img_w: int, img_h: int):
         """
@@ -276,6 +342,7 @@ class ImageViewWidget(QWidget):
     def load_experiment_data(self, directory_path, use_registered=True):
         """
         Load experiment image data from directory.
+        Supports both 3i format (.npy files) and mini (OPES) format (CellVideo TIFF files).
         
         Args:
             directory_path (str): Path to the experiment directory
@@ -305,17 +372,23 @@ class ImageViewWidget(QWidget):
         }
         
         try:
-            # Define file paths
+            # Define file paths for 3i format
             reg_tif_path = os.path.join(directory_path, "Ch1-reg.tif")
             reg_tif_chan2_path = os.path.join(directory_path, "Ch2-reg.tif")
             npy_ch0_path = os.path.join(directory_path, "ImageData_Ch0_TP0000000.npy")
             npy_ch1_path = os.path.join(directory_path, "ImageData_Ch1_TP0000000.npy")
+            
+            # Check for mini (OPES) format directories
+            cellvideo1_path = os.path.join(directory_path, "CellVideo1", "CellVideo")
+            cellvideo2_path = os.path.join(directory_path, "CellVideo2", "CellVideo")
+            
             exp_details = os.path.join(directory_path, "experiment_summary.pkl")
             exp_json = os.path.join(directory_path, "experiment_summary.json")
             
             # Check what files are available
             result['has_registered_tif'] = os.path.isfile(reg_tif_path)
-            result['has_raw_numpy'] = os.path.isfile(npy_ch0_path)
+            result['has_raw_numpy'] = (os.path.isfile(npy_ch0_path) or 
+                                       os.path.isdir(cellvideo1_path))
             
             # Load image data based on preference and availability
             if use_registered and result['has_registered_tif']:
@@ -375,23 +448,52 @@ class ImageViewWidget(QWidget):
             raise Exception(f"Failed to load registered TIFF files: {e}")
 
     def _load_raw_numpy(self, npy_ch0_path, npy_ch1_path, result):
-        """Load raw numpy files."""
-        self.set_loading_message("Loading raw numpy files...")
+        """Load raw numpy files (3i format) or raw TIFF files (mini format)."""
+        self.set_loading_message("Loading raw data files...")
         
         try:
-            # Load Channel 0 (usually Channel 1 in the UI)
-            print(f"DEBUG: Loading raw numpy from {npy_ch0_path}")
-            result['tif'] = np.load(npy_ch0_path)
-            print(f"DEBUG: Ch0 shape: {result['tif'].shape}, dtype: {result['tif'].dtype}")
+            # Check if this is 3i format (.npy files) or mini format (CellVideo directories)
+            is_3i_format = os.path.isfile(npy_ch0_path)
             
-            # Load Channel 1 (usually Channel 2 in the UI) if available
-            if os.path.isfile(npy_ch1_path):
-                print(f"DEBUG: Loading Ch1 from {npy_ch1_path}")
-                result['tif_chan2'] = np.load(npy_ch1_path)
-                print(f"DEBUG: Ch1 shape: {result['tif_chan2'].shape}, dtype: {result['tif_chan2'].dtype}")
+            if is_3i_format:
+                # 3i format: Load from .npy files
+                print(f"DEBUG: Loading 3i raw numpy from {npy_ch0_path}")
+                result['tif'] = np.load(npy_ch0_path)
+                print(f"DEBUG: Ch0 shape: {result['tif'].shape}, dtype: {result['tif'].dtype}")
+                
+                # Load Channel 1 (usually Channel 2 in the UI) if available
+                if os.path.isfile(npy_ch1_path):
+                    print(f"DEBUG: Loading Ch1 from {npy_ch1_path}")
+                    result['tif_chan2'] = np.load(npy_ch1_path)
+                    print(f"DEBUG: Ch1 shape: {result['tif_chan2'].shape}, dtype: {result['tif_chan2'].dtype}")
+            else:
+                # Mini (OPES) format: Load from CellVideo1/CellVideo/*.tif(f) and CellVideo2/CellVideo/*.tif(f)
+                print(f"DEBUG: Detected mini (OPES) format, looking for CellVideo directories")
+                directory_path = os.path.dirname(npy_ch0_path)
+                
+                # Load Channel 1 from CellVideo1/CellVideo/
+                cellvideo1_path = os.path.join(directory_path, "CellVideo1", "CellVideo")
+                if os.path.isdir(cellvideo1_path):
+                    result['tif'] = self._load_cellvideo_tiffs(cellvideo1_path, "CellVideo1")
+                    if result['tif'] is not None:
+                        print(f"DEBUG: CellVideo1 shape: {result['tif'].shape}, dtype: {result['tif'].dtype}")
+                else:
+                    print(f"DEBUG: CellVideo1 directory not found at {cellvideo1_path}")
+                
+                # Load Channel 2 from CellVideo2/CellVideo/
+                cellvideo2_path = os.path.join(directory_path, "CellVideo2", "CellVideo")
+                if os.path.isdir(cellvideo2_path):
+                    result['tif_chan2'] = self._load_cellvideo_tiffs(cellvideo2_path, "CellVideo2")
+                    if result['tif_chan2'] is not None:
+                        print(f"DEBUG: CellVideo2 shape: {result['tif_chan2'].shape}, dtype: {result['tif_chan2'].dtype}")
+                else:
+                    print(f"DEBUG: CellVideo2 directory not found at {cellvideo2_path}")
+                
+                if result['tif'] is None and result['tif_chan2'] is None:
+                    raise Exception("No CellVideo TIFF files found in mini (OPES) format directory")
                 
         except Exception as e:
-            raise Exception(f"Failed to load raw numpy files: {e}")
+            raise Exception(f"Failed to load raw data files: {e}")
 
     def _robust_tiff_load(self, tiff_path, channel_name):
         """Load TIFF file with multiple fallback methods."""
@@ -457,6 +559,74 @@ class ImageViewWidget(QWidget):
                     print(f"DEBUG: Loaded page {i}/{total_pages}")
             
             return tif_data
+
+    def _load_cellvideo_tiffs(self, cellvideo_path, channel_name):
+        """
+        Load all TIFF files from a CellVideo directory (mini/OPES format).
+        
+        Args:
+            cellvideo_path: Path to CellVideo1/CellVideo or CellVideo2/CellVideo directory
+            channel_name: Name for debug output (e.g., "CellVideo1")
+            
+        Returns:
+            numpy array with all frames concatenated, or None if no files found
+        """
+        try:
+            # Find all .tif and .tiff files in the directory
+            tiff_files = []
+            if os.path.isdir(cellvideo_path):
+                for filename in os.listdir(cellvideo_path):
+                    if filename.lower().endswith(('.tif', '.tiff')):
+                        tiff_files.append(os.path.join(cellvideo_path, filename))
+            
+            if not tiff_files:
+                print(f"DEBUG: No TIFF files found in {cellvideo_path}")
+                return None
+            
+            # Sort files naturally (handles numeric sequences correctly)
+            def natural_sort_key(s):
+                """Natural sort key for sorting filenames with numbers."""
+                import re
+                return [int(text) if text.isdigit() else text.lower()
+                        for text in re.split(r'(\d+)', s)]
+            
+            tiff_files.sort(key=natural_sort_key)
+            print(f"DEBUG: Found {len(tiff_files)} TIFF files in {cellvideo_path}")
+            
+            # Load all TIFF files and concatenate them
+            all_frames = []
+            for i, tiff_file in enumerate(tiff_files):
+                try:
+                    # Load the TIFF file (can be single or multi-frame)
+                    frames = tifffile.imread(tiff_file)
+                    
+                    # Handle both single frame and multi-frame TIFFs
+                    if frames.ndim == 2:
+                        # Single frame - add time dimension
+                        frames = frames[np.newaxis, ...]
+                    
+                    all_frames.append(frames)
+                    
+                    if i % 10 == 0 or i < 3:
+                        print(f"DEBUG: Loaded {channel_name} file {i+1}/{len(tiff_files)}: {os.path.basename(tiff_file)} - shape: {frames.shape}")
+                        
+                except Exception as e:
+                    print(f"DEBUG: Error loading {tiff_file}: {e}")
+                    continue
+            
+            if not all_frames:
+                print(f"DEBUG: No frames could be loaded from {cellvideo_path}")
+                return None
+            
+            # Concatenate all frames along time axis
+            result = np.concatenate(all_frames, axis=0)
+            print(f"DEBUG: {channel_name} concatenated shape: {result.shape}, dtype: {result.dtype}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"DEBUG: Error in _load_cellvideo_tiffs for {channel_name}: {e}")
+            return None
 
     def _load_experiment_metadata(self, exp_details, exp_json, directory_path):
         """Load experiment metadata from pickle or JSON files."""

@@ -19,7 +19,7 @@ def main():
         parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         sys.path.insert(0, parent_dir)
         
-        from app import main as app_main
+        from .app import main as app_main
         sys.exit(app_main())
 
 

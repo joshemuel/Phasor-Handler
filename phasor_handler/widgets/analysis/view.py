@@ -6,7 +6,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
     QPushButton, QSlider, QSizePolicy, QFileDialog, QMessageBox, 
-    QCheckBox, QLabel, QDoubleSpinBox
+    QCheckBox, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt
 

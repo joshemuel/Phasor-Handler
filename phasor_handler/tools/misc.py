@@ -1,4 +1,3 @@
-import os
 import numpy as np
 
 def to_2d(a):

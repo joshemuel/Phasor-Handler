@@ -1,4 +1,5 @@
 import sys
+import os
 import subprocess
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QFileDialog, QMessageBox, 
@@ -9,7 +10,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
 
 from .widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
-from .tools import misc
 from .workers import RegistrationWorker
 from .models.dir_manager import DirManager
 from .themes import apply_dark_theme
@@ -149,7 +149,12 @@ class MainWindow(QMainWindow):
         for i, conv_dir in enumerate(self.selected_dirs):
             self.conv_log.append(f"Processing ({i+1}/{len(self.selected_dirs)}): {conv_dir}")
             # 1. Run convert.py
-            cmd = [sys.executable, "scripts/convert.py", str(conv_dir), "--mode", mode]
+            if any(fname.endswith("000.npy") for fname in os.listdir(conv_dir)):
+                cmd = [sys.executable, "phasor_handler/scripts/convert.py", str(conv_dir), "-s", "i3", "--mode", mode]
+                print("Detected i3 source based on file pattern.")
+            else:
+                cmd = [sys.executable, "phasor_handler/scripts/convert.py", str(conv_dir), "-s", "mini", "--mode", mode]
+                print("Detected mini source based on file pattern.")
             try:
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
                 for line in proc.stdout:
@@ -165,7 +170,10 @@ class MainWindow(QMainWindow):
                 continue
 
             # 2. Run meta_reader.py
-            meta_cmd = [sys.executable, "scripts/meta_reader.py", "-f", str(conv_dir)]
+            if any(fname.endswith("000.npy") for fname in os.listdir(conv_dir)):
+                meta_cmd = [sys.executable, "phasor_handler/scripts/meta_reader.py", "-s", "i3", str(conv_dir)]
+            else:
+                meta_cmd = [sys.executable, "phasor_handler/scripts/meta_reader.py", "-s", "mini", str(conv_dir)]
             self.conv_log.append(f"\n[meta_reader] Reading metadata for: {conv_dir}")
             try:
                 meta_proc = subprocess.Popen(meta_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
