@@ -71,7 +71,7 @@ class ImageViewWidget(QWidget):
         self.reg_tif_label.setMinimumSize(self._initial_min_width, self._initial_min_height)
         self.reg_tif_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
-        layout.addWidget(self.reg_tif_label, 1)  # Give stretch factor of 1 to make it greedy
+        layout.addWidget(self.reg_tif_label, 1)
         self.setLayout(layout)
     
     def get_label(self):
@@ -128,9 +128,8 @@ class ImageViewWidget(QWidget):
             pixel_size = self.get_pixel_size_from_metadata(metadata)
             if pixel_size is not None:
                 base_pix = self.draw_scale_bar(base_pix, pixel_size, w, h)
-        
-        self.reg_tif_label.setFixedSize(base_pix.size())
         self.reg_tif_label.setPixmap(base_pix)
+        self.reg_tif_label.updateGeometry()
         self.reg_tif_label.setText("")
         
         # Emit signal to notify parent that image was updated
@@ -223,9 +222,10 @@ class ImageViewWidget(QWidget):
             pixel_size = self.get_pixel_size_from_metadata(metadata)
             if pixel_size is not None:
                 base_pix = self.draw_scale_bar(base_pix, pixel_size, w, h)
-        
-        self.reg_tif_label.setFixedSize(base_pix.size())
+
+        # Keep the label resizable so subsequent images are not forced into a smaller box
         self.reg_tif_label.setPixmap(base_pix)
+        self.reg_tif_label.updateGeometry()
         self.reg_tif_label.setText("")
         
         # Emit signal to notify parent that image was updated
@@ -271,14 +271,14 @@ class ImageViewWidget(QWidget):
         
         # Determine minimum size based on image dimensions and screen constraints
         # Add some padding for UI elements (40px)
-        padding = 40
+        # padding = 40
         
         # Start with image dimensions plus padding
-        desired_width = new_width + padding
-        desired_height = new_height + padding
+        desired_width = new_width #+ padding
+        desired_height = new_height #+ padding
         
         # Ensure minimum viable size (not too small)
-        min_viable_size = 400
+        min_viable_size = 100
         desired_width = max(desired_width, min_viable_size)
         desired_height = max(desired_height, min_viable_size)
         
@@ -286,12 +286,12 @@ class ImageViewWidget(QWidget):
         if desired_width > max_available_width:
             desired_width = max_available_width
             # Maintain aspect ratio
-            desired_height = int(desired_width / aspect_ratio) + padding
+            desired_height = int(desired_width / aspect_ratio) #+ padding
         
         if desired_height > max_available_height:
             desired_height = max_available_height
             # Maintain aspect ratio
-            desired_width = int(desired_height * aspect_ratio) + padding
+            desired_width = int(desired_height * aspect_ratio) #+ padding
         
         # Ensure the widget can accommodate the image
         min_width = max(min_viable_size, min(desired_width, max_available_width))

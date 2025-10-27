@@ -685,11 +685,25 @@ class AnalysisWidget(QWidget):
             # Get the current pixmap from the image view
             current_pixmap = self.reg_tif_label.pixmap()
             if current_pixmap is not None and hasattr(self, 'roi_tool'):
-                # Update the ROI tool with the new pixmap
                 from PyQt6.QtCore import QRect
+
+                # Update the ROI tool with the new pixmap
                 self.roi_tool.set_pixmap(current_pixmap)
-                self.roi_tool.set_draw_rect(QRect(0, 0, current_pixmap.width(), current_pixmap.height()))
-                
+
+                # Compute the actual draw rect inside the label to keep ROI alignment correct
+                draw_rect = None
+                if hasattr(self.window, '_last_img_wh') and self.window._last_img_wh:
+                    img_w, img_h = self.window._last_img_wh
+                    draw_rect = self.image_view.compute_draw_rect_for_label(img_w, img_h)
+
+                # Fallback to centering math if we could not derive a draw rect
+                if not draw_rect or draw_rect.width() == 0 or draw_rect.height() == 0:
+                    offset_x = max(0, (self.reg_tif_label.width() - current_pixmap.width()) // 2)
+                    offset_y = max(0, (self.reg_tif_label.height() - current_pixmap.height()) // 2)
+                    draw_rect = QRect(offset_x, offset_y, current_pixmap.width(), current_pixmap.height())
+
+                self.roi_tool.set_draw_rect(draw_rect)
+
                 # Update image size if we have the window's image dimensions
                 if hasattr(self.window, '_last_img_wh') and self.window._last_img_wh:
                     self.roi_tool.set_image_size(self.window._last_img_wh[0], self.window._last_img_wh[1])
@@ -967,7 +981,18 @@ class AnalysisWidget(QWidget):
         # --- Update ROI Tool with new image view ---
         if hasattr(self.window, '_last_img_wh'):
             self.roi_tool.set_pixmap(base_pix)
-            self.roi_tool.set_draw_rect(QRect(0, 0, base_pix.width(), base_pix.height()))
+
+            draw_rect = None
+            if self.window._last_img_wh:
+                img_w, img_h = self.window._last_img_wh
+                draw_rect = self.image_view.compute_draw_rect_for_label(img_w, img_h)
+
+            if not draw_rect or draw_rect.width() == 0 or draw_rect.height() == 0:
+                offset_x = max(0, (self.reg_tif_label.width() - base_pix.width()) // 2)
+                offset_y = max(0, (self.reg_tif_label.height() - base_pix.height()) // 2)
+                draw_rect = QRect(offset_x, offset_y, base_pix.width(), base_pix.height())
+
+            self.roi_tool.set_draw_rect(draw_rect)
             self.roi_tool.set_image_size(self.window._last_img_wh[0], self.window._last_img_wh[1])
 
             # Update saved ROIs so they display persistently
