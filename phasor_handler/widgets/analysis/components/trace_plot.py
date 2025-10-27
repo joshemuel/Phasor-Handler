@@ -83,16 +83,27 @@ class TraceplotWidget(QWidget):
         ylim_layout.addWidget(self.reset_ylim_button)
         controls_layout.addLayout(ylim_layout)
 
+        # Add spacing between sections
+        controls_layout.addSpacing(10)
+
         # Baseline percentage spinbox
+        baseline_layout = QVBoxLayout()
+        baseline_layout.setSpacing(0)  # Small spacing between label and spinbox
+        baseline_layout.setContentsMargins(0, 0, 0, 0)
+        baseline_label = QLabel("Baseline %:")
+        baseline_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+        baseline_layout.addWidget(baseline_label)
         self.base_spinbox = QSpinBox()
         self.base_spinbox.setRange(1, 99)
         self.base_spinbox.setValue(10)
         self.base_spinbox.setFixedWidth(60)
         self.base_spinbox.setFixedHeight(25)
         self.base_spinbox.valueChanged.connect(self._update_trace_from_roi)
-        controls_layout.addWidget(QLabel("Baseline %:"))
-        controls_layout.addWidget(self.base_spinbox)
+        baseline_layout.addWidget(self.base_spinbox)
+        controls_layout.addLayout(baseline_layout)
 
+        # Add spacing between sections
+        controls_layout.addSpacing(10)
 
         # Formula dropdown
         self.formula_dropdown = QComboBox()
