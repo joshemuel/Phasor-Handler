@@ -7,6 +7,7 @@ This component handles all ROI list management including:
 - Save/Load ROI positions to/from JSON files
 - Export ROI traces to text files
 - ROI selection and editing
+- Support for both circular and freehand ROI types
 """
 
 import json
@@ -16,7 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QListWidget, QPushButton, 
     QGridLayout, QFileDialog, QMessageBox, QProgressDialog, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF
 
 
 class RoiListWidget(QWidget):
@@ -142,19 +143,41 @@ class RoiListWidget(QWidget):
         else:
             print(f"DEBUG: In editing mode for ROI {self._editing_roi_index} - allowing coordinate updates")
         
-        # Get rotation angle from ROI tool
+        # Get rotation angle and drawing mode from ROI tool
         roi_tool = getattr(self.main_window, 'roi_tool', None)
         rotation_angle = getattr(roi_tool, '_rotation_angle', 0.0) if roi_tool else 0.0
+        drawing_mode = getattr(roi_tool, '_drawing_mode', 'circular') if roi_tool else 'circular'
+        
+        # Get freehand points if in freehand mode
+        freehand_points = None
+        if drawing_mode == 'freehand' and roi_tool:
+            freehand_points = roi_tool.get_freehand_points_image_coords()
+            if freehand_points and len(freehand_points) >= 3:
+                print(f"DEBUG: Freehand ROI with {len(freehand_points)} points")
+            else:
+                print("DEBUG: Invalid freehand ROI (< 3 points)")
+                return
         
         # Check if we're editing an existing ROI
         if self._editing_roi_index is not None and 0 <= self._editing_roi_index < len(self.main_window._saved_rois):
             # Update existing ROI
             existing_roi = self.main_window._saved_rois[self._editing_roi_index]
             existing_roi['xyxy'] = tuple(self.main_window._last_roi_xyxy)
-            existing_roi['rotation'] = rotation_angle
             
-            print(f"DEBUG: Updated {existing_roi['name']} with new position/rotation")
-            print(f"DEBUG: New xyxy: {existing_roi['xyxy']}, New rotation: {existing_roi['rotation']}")
+            # Update based on drawing mode
+            if drawing_mode == 'freehand' and freehand_points:
+                existing_roi['type'] = 'freehand'
+                existing_roi['points'] = freehand_points
+                # Remove rotation for freehand ROIs
+                existing_roi.pop('rotation', None)
+            else:
+                existing_roi['type'] = 'circular'
+                existing_roi['rotation'] = rotation_angle
+                # Remove points for circular ROIs
+                existing_roi.pop('points', None)
+            
+            print(f"DEBUG: Updated {existing_roi['name']} as {existing_roi['type']} ROI")
+            print(f"DEBUG: New xyxy: {existing_roi['xyxy']}")
             # Emit update signal
             self.roiUpdated.emit(self._editing_roi_index, existing_roi)
             # After updating an ROI, clear editing state and deselect the item so it's no longer "active"
@@ -199,8 +222,18 @@ class RoiListWidget(QWidget):
                 'name': name, 
                 'xyxy': tuple(self.main_window._last_roi_xyxy),
                 'color': color,
-                'rotation': rotation_angle
             }
+            
+            # Add type-specific data
+            if drawing_mode == 'freehand' and freehand_points:
+                roi_data['type'] = 'freehand'
+                roi_data['points'] = freehand_points
+                print(f"Created new {name} as freehand ROI with {len(freehand_points)} points")
+            else:
+                roi_data['type'] = 'circular'
+                roi_data['rotation'] = rotation_angle
+                print(f"Created new {name} as circular ROI")
+            
             self.main_window._saved_rois.append(roi_data)
             self.roi_list_widget.addItem(name)
             print(f"Created new {name}")
@@ -262,17 +295,56 @@ class RoiListWidget(QWidget):
         # Restore and update
         try:
             self.main_window._last_roi_xyxy = xyxy
-            rotation = saved.get('rotation', 0.0)
-            if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
-                self.main_window.roi_tool.show_bbox_image_coords(xyxy, rotation)
-                self.main_window.roi_tool._rotation_angle = rotation
-            print(f"Selected ROI {row + 1} for editing - press 'r' to update it")
-            print(f"DEBUG: Restored xyxy: {xyxy}, rotation: {rotation}")
+            
+            # Determine ROI type
+            roi_type = saved.get('type', 'circular')
+            
+            if roi_type == 'freehand':
+                # Restore freehand ROI
+                freehand_points = saved.get('points')
+                if freehand_points and hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
+                    # Set drawing mode to freehand
+                    self.main_window.roi_tool.set_drawing_mode('freehand')
+                    
+                    # Convert image points back to label coordinates for display
+                    label_points = []
+                    for img_x, img_y in freehand_points:
+                        # This is the inverse of _label_point_to_image_coords
+                        if self.main_window.roi_tool._draw_rect and self.main_window.roi_tool._img_w and self.main_window.roi_tool._img_h:
+                            norm_x = img_x / self.main_window.roi_tool._img_w
+                            norm_y = img_y / self.main_window.roi_tool._img_h
+                            pw = float(self.main_window.roi_tool._draw_rect.width())
+                            ph = float(self.main_window.roi_tool._draw_rect.height())
+                            label_x = self.main_window.roi_tool._draw_rect.left() + norm_x * pw
+                            label_y = self.main_window.roi_tool._draw_rect.top() + norm_y * ph
+                            label_points.append(QPointF(label_x, label_y))
+                    
+                    # Restore freehand points and bbox
+                    self.main_window.roi_tool._freehand_points = label_points
+                    self.main_window.roi_tool._update_bbox_from_freehand_points()
+                    self.main_window.roi_tool._rotation_angle = 0.0
+                    self.main_window.roi_tool._paint_overlay()
+                    
+                    print(f"Selected freehand ROI {row + 1} with {len(freehand_points)} points for editing")
+            else:
+                # Restore circular ROI
+                rotation = saved.get('rotation', 0.0)
+                if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
+                    # Set drawing mode to circular
+                    self.main_window.roi_tool.set_drawing_mode('circular')
+                    self.main_window.roi_tool.show_bbox_image_coords(xyxy, rotation)
+                    self.main_window.roi_tool._rotation_angle = rotation
+                    self.main_window.roi_tool._freehand_points = []  # Clear any freehand points
+                    
+                print(f"Selected circular ROI {row + 1} for editing")
+                print(f"DEBUG: Restored xyxy: {xyxy}, rotation: {rotation}")
             
             # Emit selection signal
             self.roiSelected.emit(saved)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Error restoring ROI: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _on_load_roi_positions_clicked(self):
         """Load ROI positions from a JSON file."""
@@ -305,8 +377,16 @@ class RoiListWidget(QWidget):
                     roi['name'] = f"ROI {len(self.main_window._saved_rois) + 1}"
                 if 'color' not in roi:
                     roi['color'] = (255, 255, 0, 200)  # Default yellow
-                if 'rotation' not in roi:
-                    roi['rotation'] = 0.0
+                
+                # Handle ROI type - determine if circular or freehand
+                if 'type' not in roi:
+                    # Auto-detect type based on presence of 'points' or 'rotation'
+                    if 'points' in roi and roi['points']:
+                        roi['type'] = 'freehand'
+                    else:
+                        roi['type'] = 'circular'
+                        if 'rotation' not in roi:
+                            roi['rotation'] = 0.0
                     
                 self.main_window._saved_rois.append(roi)
                 self.roi_list_widget.addItem(roi['name'])
@@ -437,14 +517,42 @@ class RoiListWidget(QWidget):
                 roi_width = x1 - x0
                 
                 if roi_height > 0 and roi_width > 0:
-                    # Extract green values from baseline frames using ellipse mask
+                    # Extract green values from baseline frames using appropriate mask
                     green_baseline_values = []
                     try:
-                        cy, cx = (y0 + y1) / 2.0, (x0 + x1) / 2.0
-                        ry, rx = roi_height / 2.0, roi_width / 2.0
-                        y_coords, x_coords = np.ogrid[y0:y1, x0:x1]
-                        mask = ((x_coords - cx) / rx) ** 2 + ((y_coords - cy) / ry) ** 2 <= 1
+                        roi_type = roi.get('type', 'circular')
                         
+                        # Create mask based on ROI type
+                        if roi_type == 'freehand':
+                            freehand_points = roi.get('points')
+                            if freehand_points and len(freehand_points) >= 3:
+                                from matplotlib.path import Path
+                                y_coords, x_coords = np.meshgrid(np.arange(y0, y1), np.arange(x0, x1))
+                                points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
+                                polygon_path = Path(freehand_points)
+                                mask_flat = polygon_path.contains_points(points)
+                                mask = mask_flat.reshape(roi_width, roi_height).T
+                            else:
+                                mask = np.ones((roi_height, roi_width), dtype=bool)
+                        else:
+                            cy, cx = (y0 + y1) / 2.0, (x0 + x1) / 2.0
+                            ry, rx = roi_height / 2.0, roi_width / 2.0
+                            rotation_angle = roi.get('rotation', 0.0)
+                            
+                            y_coords, x_coords = np.ogrid[y0:y1, x0:x1]
+                            
+                            if rotation_angle != 0.0:
+                                x_centered = x_coords - cx
+                                y_centered = y_coords - cy
+                                cos_angle = np.cos(-rotation_angle)
+                                sin_angle = np.sin(-rotation_angle)
+                                x_rotated = x_centered * cos_angle - y_centered * sin_angle
+                                y_rotated = x_centered * sin_angle + y_centered * cos_angle
+                                mask = ((x_rotated / rx) ** 2 + (y_rotated / ry) ** 2) <= 1
+                            else:
+                                mask = ((x_coords - cx) / rx) ** 2 + ((y_coords - cy) / ry) ** 2 <= 1
+                        
+                        # Extract baseline values using mask
                         for frame_idx in range(baseline_count):
                             green_frame = tif[frame_idx]
                             if mask.any():
@@ -455,7 +563,7 @@ class RoiListWidget(QWidget):
                         
                         roi_baselines[i] = float(np.mean(green_baseline_values))
                     except Exception as e:
-                        print(f"Error calculating baseline for ROI {i+1}: {e}")
+                        print(f"Error calculating baseline for ROI {i+1} ({roi.get('type', 'circular')}): {e}")
                         roi_baselines[i] = 0
                 else:
                     roi_baselines[i] = 0
@@ -504,34 +612,73 @@ class RoiListWidget(QWidget):
                     
                     x0, y0, x1, y1 = xyxy
                     
-                    # Extract green channel mean for this ROI using ellipse mask
+                    # Determine ROI type and create appropriate mask
+                    roi_type = roi.get('type', 'circular')
+                    
+                    # Extract green channel mean for this ROI using appropriate mask
                     try:
-                        # Create ellipse mask for this ROI
                         roi_height = y1 - y0
                         roi_width = x1 - x0
                         
                         if roi_height > 0 and roi_width > 0:
-                            # Create ellipse mask
-                            cy, cx = (y0 + y1) / 2.0, (x0 + x1) / 2.0
-                            ry, rx = roi_height / 2.0, roi_width / 2.0
+                            if roi_type == 'freehand':
+                                # Create polygon mask for freehand ROI
+                                freehand_points = roi.get('points')
+                                if freehand_points and len(freehand_points) >= 3:
+                                    from matplotlib.path import Path
+                                    
+                                    # Create a grid of points within the bounding box
+                                    y_coords, x_coords = np.meshgrid(np.arange(y0, y1), np.arange(x0, x1))
+                                    points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
+                                    
+                                    # Create polygon path
+                                    polygon_path = Path(freehand_points)
+                                    
+                                    # Check which points are inside the polygon
+                                    mask_flat = polygon_path.contains_points(points)
+                                    mask = mask_flat.reshape(roi_width, roi_height).T
+                                else:
+                                    # Fallback to rectangular mask if points are invalid
+                                    mask = np.ones((roi_height, roi_width), dtype=bool)
+                            else:
+                                # Create ellipse mask for circular ROI
+                                cy, cx = (y0 + y1) / 2.0, (x0 + x1) / 2.0
+                                ry, rx = roi_height / 2.0, roi_width / 2.0
+                                
+                                # Handle rotation if present
+                                rotation_angle = roi.get('rotation', 0.0)
+                                
+                                y_grid, x_grid = np.ogrid[y0:y1, x0:x1]
+                                
+                                if rotation_angle != 0.0:
+                                    # Rotate coordinates
+                                    x_centered = x_grid - cx
+                                    y_centered = y_grid - cy
+                                    
+                                    cos_angle = np.cos(-rotation_angle)
+                                    sin_angle = np.sin(-rotation_angle)
+                                    
+                                    x_rotated = x_centered * cos_angle - y_centered * sin_angle
+                                    y_rotated = x_centered * sin_angle + y_centered * cos_angle
+                                    
+                                    mask = ((x_rotated / rx) ** 2 + (y_rotated / ry) ** 2) <= 1
+                                else:
+                                    mask = ((x_grid - cx) / rx) ** 2 + ((y_grid - cy) / ry) ** 2 <= 1
                             
-                            y_coords, x_coords = np.ogrid[y0:y1, x0:x1]
-                            mask = ((x_coords - cx) / rx) ** 2 + ((y_coords - cy) / ry) ** 2 <= 1
-                            
-                            # Extract green values
+                            # Extract green values using the mask
                             if mask.any():
                                 green_roi_pixels = green_frame[y0:y1, x0:x1][mask]
                                 green_mean = float(np.mean(green_roi_pixels))
                             else:
-                                # Fallback to rectangular mean
+                                # Fallback to rectangular mean if mask is empty
                                 green_mean = float(np.mean(green_frame[y0:y1, x0:x1]))
                         else:
                             green_mean = "N/A"
                     except Exception as e:
-                        print(f"Error extracting green values for ROI {i+1}, frame {frame_idx}: {e}")
+                        print(f"Error extracting green values for ROI {i+1} ({roi_type}), frame {frame_idx}: {e}")
                         green_mean = "N/A"
                     
-                    # Extract red channel mean for this ROI using ellipse mask
+                    # Extract red channel mean using the same mask
                     try:
                         if red_frame is not None and roi_height > 0 and roi_width > 0:
                             if mask.any():
@@ -542,7 +689,7 @@ class RoiListWidget(QWidget):
                         else:
                             red_mean = "N/A"
                     except Exception as e:
-                        print(f"Error extracting red values for ROI {i+1}, frame {frame_idx}: {e}")
+                        print(f"Error extracting red values for ROI {i+1} ({roi_type}), frame {frame_idx}: {e}")
                         red_mean = "N/A"
                     
                     # Calculate trace value based on formula index

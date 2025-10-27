@@ -648,20 +648,44 @@ class CircleRoiTool(QObject):
                         spen.setWidth(3)
                         painter.setPen(spen)
                         
-                        # Check if this saved ROI has rotation
-                        rotation_angle = saved.get('rotation', 0.0)
-                        if rotation_angle != 0.0:
-                            # Draw rotated ellipse
-                            center_x = px0 + lw / 2.0
-                            center_y = py0 + lh / 2.0
-                            painter.save()
-                            painter.translate(center_x, center_y)
-                            painter.rotate(math.degrees(rotation_angle))
-                            painter.drawEllipse(int(round(-lw/2)), int(round(-lh/2)), int(round(lw)), int(round(lh)))
-                            painter.restore()
+                        # Check ROI type
+                        roi_type = saved.get('type', 'circular')
+                        
+                        if roi_type == 'freehand':
+                            # Draw freehand polygon
+                            freehand_points = saved.get('points')
+                            if freehand_points and len(freehand_points) >= 3:
+                                polygon = QPolygonF()
+                                for img_x, img_y in freehand_points:
+                                    # Convert image coords to label coords (same logic as _label_bbox_from_image_xyxy)
+                                    if self._draw_rect and self._img_w and self._img_h:
+                                        norm_x = img_x / self._img_w
+                                        norm_y = img_y / self._img_h
+                                        pw = float(self._draw_rect.width())
+                                        ph = float(self._draw_rect.height())
+                                        # Add offset to get to label coords, then subtract to get to pixmap coords
+                                        label_x = float(self._draw_rect.left() + norm_x * pw) - offset_x
+                                        label_y = float(self._draw_rect.top() + norm_y * ph) - offset_y
+                                        polygon.append(QPointF(label_x, label_y))
+                                
+                                if len(polygon) >= 3:
+                                    painter.drawPolygon(polygon)
                         else:
-                            # Draw normal ellipse
-                            painter.drawEllipse(int(round(px0)), int(round(py0)), int(round(lw)), int(round(lh)))
+                            # Draw circular/elliptical ROI
+                            rotation_angle = saved.get('rotation', 0.0)
+                            if rotation_angle != 0.0:
+                                # Draw rotated ellipse
+                                center_x = px0 + lw / 2.0
+                                center_y = py0 + lh / 2.0
+                                painter.save()
+                                painter.translate(center_x, center_y)
+                                painter.rotate(math.degrees(rotation_angle))
+                                painter.drawEllipse(int(round(-lw/2)), int(round(-lh/2)), int(round(lw)), int(round(lh)))
+                                painter.restore()
+                            else:
+                                # Draw normal ellipse
+                                painter.drawEllipse(int(round(px0)), int(round(py0)), int(round(lw)), int(round(lh)))
+                        
                         # draw label in middle (center text using font metrics) only if labels are enabled
                         if getattr(self, '_show_labels', True):
                             tx = float(px0 + lw / 2.0)
