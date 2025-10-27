@@ -65,8 +65,6 @@ class CircleRoiTool(QObject):
         # whether to show the small mode text in the overlay (can be toggled by view)
         self._show_mode_text = True
 
-    # --- Public API you call from app.py when the image view updates ---
-
     def set_draw_rect(self, rect: QRect):
         """Rectangle where the scaled pixmap is drawn inside the label."""
         if rect is None:
@@ -485,14 +483,21 @@ class CircleRoiTool(QObject):
         pen = QPen(QColor(255, 255, 0, 180))
         pen.setWidth(3)
         painter.setPen(pen)
+
+        # Calculate offsets when the pixmap is centered inside a larger label
+        offset_x = float(self._draw_rect.left()) if self._draw_rect is not None else 0.0
+        offset_y = float(self._draw_rect.top()) if self._draw_rect is not None else 0.0
+
         # Draw current interactive bbox if present and allowed
         if self._bbox is not None and getattr(self, '_show_current_bbox', True):
             try:
                 left, top, w, h = self._bbox
+                draw_left = float(left) - offset_x
+                draw_top = float(top) - offset_y
                 if self._rotation_angle != 0.0:
                     # Draw rotated ellipse
-                    center_x = left + w / 2.0
-                    center_y = top + h / 2.0
+                    center_x = draw_left + w / 2.0
+                    center_y = draw_top + h / 2.0
                     painter.save()
                     painter.translate(center_x, center_y)
                     painter.rotate(math.degrees(self._rotation_angle))
@@ -500,7 +505,7 @@ class CircleRoiTool(QObject):
                     painter.restore()
                 else:
                     # Draw normal ellipse
-                    painter.drawEllipse(int(round(left)), int(round(top)), int(round(w)), int(round(h)))
+                    painter.drawEllipse(int(round(draw_left)), int(round(draw_top)), int(round(w)), int(round(h)))
             except Exception:
                 pass
 
@@ -520,6 +525,8 @@ class CircleRoiTool(QObject):
                         if lbbox is None:
                             continue
                         lx0, ly0, lw, lh = lbbox
+                        px0 = float(lx0) - offset_x
+                        py0 = float(ly0) - offset_y
                         # determine color
                         col = saved.get('color')
                         if isinstance(col, QColor):
@@ -537,8 +544,8 @@ class CircleRoiTool(QObject):
                         rotation_angle = saved.get('rotation', 0.0)
                         if rotation_angle != 0.0:
                             # Draw rotated ellipse
-                            center_x = lx0 + lw / 2.0
-                            center_y = ly0 + lh / 2.0
+                            center_x = px0 + lw / 2.0
+                            center_y = py0 + lh / 2.0
                             painter.save()
                             painter.translate(center_x, center_y)
                             painter.rotate(math.degrees(rotation_angle))
@@ -546,11 +553,11 @@ class CircleRoiTool(QObject):
                             painter.restore()
                         else:
                             # Draw normal ellipse
-                            painter.drawEllipse(int(round(lx0)), int(round(ly0)), int(round(lw)), int(round(lh)))
+                            painter.drawEllipse(int(round(px0)), int(round(py0)), int(round(lw)), int(round(lh)))
                         # draw label in middle (center text using font metrics) only if labels are enabled
                         if getattr(self, '_show_labels', True):
-                            tx = float(lx0 + lw / 2.0)
-                            ty = float(ly0 + lh / 2.0)
+                            tx = float(px0 + lw / 2.0)
+                            ty = float(py0 + lh / 2.0)
                             # Show full name if it starts with "S" (stimulated ROIs), otherwise extract number from ROI name
                             roi_name = saved.get('name', '')
                             if roi_name and roi_name.startswith('S'):
@@ -607,18 +614,20 @@ class CircleRoiTool(QObject):
                         if lbbox is None:
                             continue
                         lx0, ly0, lw, lh = lbbox
+                        px0 = float(lx0) - offset_x
+                        py0 = float(ly0) - offset_y
 
                         # Use cyan color with dashed line style for stimulus ROIs
                         stim_pen = QPen(QColor(0, 200, 255, 220))  # Cyan color
                         stim_pen.setWidth(3)
                         stim_pen.setStyle(Qt.PenStyle.DashLine)  # Dashed line
                         painter.setPen(stim_pen)
-                        painter.drawEllipse(int(round(lx0)), int(round(ly0)), int(round(lw)), int(round(lh)))
+                        painter.drawEllipse(int(round(px0)), int(round(py0)), int(round(lw)), int(round(lh)))
 
                         # Draw stimulus label (e.g., "S1", "S2") centered using font metrics only if labels are enabled
                         if getattr(self, '_show_labels', True):
-                            tx = float(lx0 + lw / 2.0)
-                            ty = float(ly0 + lh / 2.0)
+                            tx = float(px0 + lw / 2.0)
+                            ty = float(py0 + lh / 2.0)
                             text_col = QColor(255, 255, 255)  # White text
                             stim_name = stim_roi.get('name', f"S{stim_roi.get('id', '?')}")
                             fm = painter.fontMetrics()
