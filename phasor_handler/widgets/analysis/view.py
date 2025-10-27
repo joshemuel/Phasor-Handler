@@ -1,7 +1,5 @@
 # TODO Implement better ROI drawing
-# TODO read Mini2P data
 # TODO Compartmentalize the image functionalities better
-# TODO Fix dimensionality bug
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
@@ -177,6 +175,29 @@ class AnalysisWidget(QWidget):
         # Track which channel is currently selected for BnC
         self._bnc_active_channel = 1
 
+        # --- ROI Tool Selection Widget ---
+        roi_tool_group = QGroupBox("ROI Drawing Tool")
+        roi_tool_layout = QVBoxLayout()
+
+        self.circular_roi_button = QPushButton("Circle ROI Tool")
+        self.circular_roi_button.setEnabled(False)
+        self.circular_roi_button.setCheckable(True)
+        self.circular_roi_button.setChecked(True)  # Default mode
+        self._circular_roi = True
+        self.circular_roi_button.toggled.connect(lambda checked, m='circular': self._on_roi_tool_toggled(m, checked))
+
+        self.freehand_roi_button = QPushButton("Freehand ROI Tool")
+        self.freehand_roi_button.setEnabled(False)
+        self.freehand_roi_button.setCheckable(True)
+        self.freehand_roi_button.setChecked(False)
+        self._freehand_roi = False
+        self.freehand_roi_button.toggled.connect(lambda checked, m='freehand': self._on_roi_tool_toggled(m, checked))
+
+        roi_tool_layout.addWidget(self.circular_roi_button)
+        roi_tool_layout.addWidget(self.freehand_roi_button)
+        roi_tool_group.setLayout(roi_tool_layout)
+
+
         midl_vbox.addWidget(self.file_type_button)
         midl_vbox.addWidget(self.channel_button)
         midl_vbox.addWidget(self.stimulation_area_button)
@@ -185,6 +206,7 @@ class AnalysisWidget(QWidget):
 
         midr_vbox.addWidget(zproj_group)
         midr_vbox.addWidget(self.bnc_widget)
+        midr_vbox.addWidget(roi_tool_group)  # Add ROI tool group to right column
 
         
 
@@ -527,6 +549,53 @@ class AnalysisWidget(QWidget):
         except Exception as e:
             print(f"DEBUG: Error updating BnC controls: {e}")
 
+    def _on_roi_tool_toggled(self, mode, checked):
+        """Handle toggling of the ROI tool buttons so only one drawing mode
+        is active at a time. mode is one of 'circular', 'freehand'.
+        """
+        try:
+            # Turn off other modes
+            if mode != 'circular' and getattr(self, 'circular_roi_button', None) is not None:
+                self.circular_roi_button.blockSignals(True)
+                self.circular_roi_button.setChecked(False)
+                self.circular_roi_button.blockSignals(False)
+                self._circular_roi = False
+
+            if mode != 'freehand' and getattr(self, 'freehand_roi_button', None) is not None:
+                self.freehand_roi_button.blockSignals(True)
+                self.freehand_roi_button.setChecked(False)
+                self.freehand_roi_button.blockSignals(False)
+                self._freehand_roi = False
+
+            # Set the requested mode flag based on the 'checked' state
+            if mode == 'circular':
+                self._circular_roi = bool(checked)
+                if checked:
+                    self.roi_tool.set_drawing_mode('circular')
+                    print("Switched to circular ROI drawing mode")
+            elif mode == 'freehand':
+                self._freehand_roi = bool(checked)
+                if checked:
+                    self.roi_tool.set_drawing_mode('freehand')
+                    print("Switched to freehand ROI drawing mode")
+
+            # If the user turned on one mode, ensure others are off at the flag level
+            if self._circular_roi:
+                self._freehand_roi = False
+            if self._freehand_roi:
+                self._circular_roi = False
+                
+            # If no mode is active (user unchecked), default back to circular
+            if not self._circular_roi and not self._freehand_roi:
+                self.circular_roi_button.blockSignals(True)
+                self.circular_roi_button.setChecked(True)
+                self.circular_roi_button.blockSignals(False)
+                self._circular_roi = True
+                self.roi_tool.set_drawing_mode('circular')
+                print("Defaulting back to circular ROI drawing mode")
+        except Exception as e:
+            print(f"DEBUG: Error toggling ROI tool: {e}")
+
     def display_reg_tif_image(self, current, previous=None):
         """Load registered tif(s) for the selected directory and initialize slider/view."""
         if not current:
@@ -581,6 +650,8 @@ class AnalysisWidget(QWidget):
         self.zproj_std_button.setEnabled(False)
         self.zproj_max_button.setEnabled(False)
         self.zproj_mean_button.setEnabled(False)
+        self.circular_roi_button.setEnabled(False)
+        self.freehand_roi_button.setEnabled(False)
         self.view_metadata_button.setEnabled(False)
         self.scale_bar_checkbox.setEnabled(False)
         self.save_img.setEnabled(False)
@@ -637,6 +708,10 @@ class AnalysisWidget(QWidget):
         self.zproj_std_button.setEnabled(True)
         self.zproj_max_button.setEnabled(True)
         self.zproj_mean_button.setEnabled(True)
+        
+        # Enable ROI tool buttons when an image is loaded
+        self.circular_roi_button.setEnabled(True)
+        self.freehand_roi_button.setEnabled(True)
         
         # Enable BnC controls when an image is loaded
         self.bnc_widget.enable_controls(True, has_channel2)

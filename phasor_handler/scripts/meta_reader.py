@@ -1,3 +1,5 @@
+# TODO read from .txt files of CHA and CHB channels if available
+
 #!/usr/bin/env python3
 """
 meta_reader.py
@@ -402,12 +404,16 @@ def process_mini2p_folder(folder_path: str):
         if os.path.isdir(subdir_path):
             folders[subdir] = subdir_path
             tdms_files = [os.path.join(subdir_path, f) for f in os.listdir(subdir_path) if f.endswith('.tdms')]
-            if tdms_files:
-                path_df[subdir] = tdms_files
+            txt_files = [os.path.join(subdir_path, f) for f in os.listdir(subdir_path) if f.endswith('.txt')]
+
+            if txt_files:
+                path_df[subdir] = (tdms_files, txt_files)
+            elif tdms_files:
+                path_df[subdir] = (tdms_files, None)
     
     # Load TDMS data into nested dict structure
     tdms_data = {}
-    for folder_name, tdms_files in path_df.items():
+    for folder_name, (tdms_files, txt_files) in path_df.items():
         if folder_name == "SyncInformation":
             continue
         

@@ -2,7 +2,7 @@
 # TODO Any left click redefines a new ROI, never edit. Edit is only right click and drag
 
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QRect, QPointF
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont, QPainterPath, QPolygonF
 from PyQt6.QtWidgets import QLabel
 from typing import Optional
 import numpy as np
@@ -10,11 +10,15 @@ import math
 
 
 class CircleRoiTool(QObject):
-    """Ellipse ROI tool attached to a QLabel showing a scaled pixmap.
+    """Ellipse/Freehand ROI tool attached to a QLabel showing a scaled pixmap.
 
     Internal bbox is stored as a float tuple (left, top, width, height).
     Translation uses QPointF anchor and bbox_origin floats so moving does
     not introduce rounding drift that changes size.
+    
+    Supports two drawing modes:
+    - 'circular': Draw elliptical ROIs (default)
+    - 'freehand': Draw freeform polygonal ROIs by tracking mouse path
     """
     roiChanged = pyqtSignal(tuple)   # (x0, y0, x1, y1) in image coords (during drag)
     roiFinalized = pyqtSignal(tuple) # (x0, y0, x1, y1) in image coords (on release)
@@ -41,6 +45,12 @@ class CircleRoiTool(QObject):
         self._bbox = None
         self._dragging = False
         self._rotation_angle = 0.0  # rotation angle in radians
+        
+        # Drawing mode: 'circular' (default) or 'freehand'
+        self._drawing_mode = 'circular'
+        
+        # Freehand path tracking
+        self._freehand_points = []  # List of QPointF for freehand path
 
         # persistent saved ROIs: list of dicts with keys 'name','xyxy','color'
         # color may be a QColor or (r,g,b,a) tuple
@@ -81,6 +91,18 @@ class CircleRoiTool(QObject):
         """The pixmap currently shown in the label (scaled)."""
         self._base_pixmap = pm
 
+    def set_drawing_mode(self, mode: str):
+        """Set the drawing mode: 'circular' or 'freehand'."""
+        if mode in ('circular', 'freehand'):
+            self._drawing_mode = mode
+            print(f"Drawing mode set to: {mode}")
+        else:
+            print(f"Warning: Invalid drawing mode '{mode}', keeping '{self._drawing_mode}'")
+
+    def get_drawing_mode(self) -> str:
+        """Get the current drawing mode."""
+        return self._drawing_mode
+
     def clear(self):
         """Clear the ROI overlay and internal state."""
         self._start_pos = None
@@ -88,6 +110,7 @@ class CircleRoiTool(QObject):
         self._bbox = None
         self._rotation_angle = 0.0
         self._dragging = False
+        self._freehand_points = []
         if self._base_pixmap is not None:
             self._label.setPixmap(self._base_pixmap)
 
@@ -99,6 +122,7 @@ class CircleRoiTool(QObject):
         self._current_pos = None
         self._bbox = None
         self._dragging = False
+        self._freehand_points = []
         # Keep the current interaction mode active
         # Don't reset rotation angle - preserve it for the next ROI
         # self._rotation_angle = 0.0
@@ -253,6 +277,7 @@ class CircleRoiTool(QObject):
                 
                 # Clear any existing bbox to ensure we're starting fresh
                 self._bbox = None
+                self._freehand_points = []
                 self._start_pos = event.position()  # QPointF
                 self._current_pos = self._start_pos
                 
@@ -261,6 +286,14 @@ class CircleRoiTool(QObject):
                 self._dragging = True
                 self._rotation_angle = 0.0
                 self._interaction_mode = 'translate'
+                
+                # For freehand mode, start collecting points
+                if self._drawing_mode == 'freehand':
+                    self._freehand_points = [QPointF(self._start_pos)]
+                    print(f"Started freehand drawing at ({self._start_pos.x():.1f}, {self._start_pos.y():.1f})")
+                else:
+                    # Circular mode - update bbox as before
+                    self._update_bbox_from_points()
                 
                 # Clear any ROI selection in the list widget to prevent unintentional editing
                 if hasattr(self.parent(), 'roi_list_component'):
@@ -271,9 +304,8 @@ class CircleRoiTool(QObject):
                         roi_list_widget.clearSelection()
                     print("Cleared ROI list selection - starting new ROI")
                 
-                self._update_bbox_from_points()
                 self._paint_overlay()
-                print(f"Started drawing NEW ROI (left-click always creates new)")
+                print(f"Started drawing NEW ROI in {self._drawing_mode} mode (left-click always creates new)")
                 return True
 
             # RIGHT CLICK: Used for editing existing ROIs (select, translate, rotate)
@@ -354,7 +386,19 @@ class CircleRoiTool(QObject):
             pos = self._constrain_to_draw_rect(event.position())
             if self._mode == 'draw' and self._start_pos is not None:
                 self._current_pos = pos
-                self._update_bbox_from_points()
+                
+                # Handle freehand drawing
+                if self._drawing_mode == 'freehand':
+                    # Add point to the path if it's far enough from the last point
+                    if len(self._freehand_points) == 0 or \
+                       (pos - self._freehand_points[-1]).manhattanLength() > 2.0:
+                        self._freehand_points.append(QPointF(pos))
+                    # Update bbox to encompass all freehand points
+                    self._update_bbox_from_freehand_points()
+                else:
+                    # Circular mode - update bbox from start/current points
+                    self._update_bbox_from_points()
+                
                 self._paint_overlay()
                 # Emit live ROI (image coords)
                 xyxy = self._current_roi_image_coords()
@@ -410,7 +454,25 @@ class CircleRoiTool(QObject):
                 self._dragging = False
                 # finalize current pos and bbox
                 self._current_pos = self._constrain_to_draw_rect(event.position())
-                self._update_bbox_from_points()
+                
+                # For freehand mode, close the path by connecting to start
+                if self._drawing_mode == 'freehand':
+                    if len(self._freehand_points) > 2:
+                        # Close the path by ensuring last point connects to first
+                        # (drawing will handle this automatically)
+                        self._update_bbox_from_freehand_points()
+                        print(f"Freehand ROI completed with {len(self._freehand_points)} points")
+                    else:
+                        print("Freehand ROI too small (need at least 3 points), discarding")
+                        self._freehand_points = []
+                        self._bbox = None
+                        self._mode = None
+                        self._paint_overlay()
+                        return True
+                else:
+                    # Circular mode
+                    self._update_bbox_from_points()
+                
                 self._paint_overlay(final=True)
                 xyxy = self._current_roi_image_coords()
                 if xyxy is not None:
@@ -475,6 +537,24 @@ class CircleRoiTool(QObject):
         h = max(1.0, abs(y1 - y0))
         self._bbox = (left, top, w, h)
 
+    def _update_bbox_from_freehand_points(self):
+        """Compute bounding box from freehand points list."""
+        if not self._freehand_points or len(self._freehand_points) < 2:
+            self._bbox = None
+            return
+        
+        # Find min/max coordinates
+        min_x = min(p.x() for p in self._freehand_points)
+        max_x = max(p.x() for p in self._freehand_points)
+        min_y = min(p.y() for p in self._freehand_points)
+        max_y = max(p.y() for p in self._freehand_points)
+        
+        left = float(min_x)
+        top = float(min_y)
+        w = max(1.0, float(max_x - min_x))
+        h = max(1.0, float(max_y - min_y))
+        self._bbox = (left, top, w, h)
+
     def _paint_overlay(self, final=False):
         if self._base_pixmap is None:
             return
@@ -488,25 +568,53 @@ class CircleRoiTool(QObject):
         offset_x = float(self._draw_rect.left()) if self._draw_rect is not None else 0.0
         offset_y = float(self._draw_rect.top()) if self._draw_rect is not None else 0.0
 
-        # Draw current interactive bbox if present and allowed
+        # Draw current interactive bbox/path if present and allowed
         if self._bbox is not None and getattr(self, '_show_current_bbox', True):
             try:
-                left, top, w, h = self._bbox
-                draw_left = float(left) - offset_x
-                draw_top = float(top) - offset_y
-                if self._rotation_angle != 0.0:
-                    # Draw rotated ellipse
-                    center_x = draw_left + w / 2.0
-                    center_y = draw_top + h / 2.0
-                    painter.save()
-                    painter.translate(center_x, center_y)
-                    painter.rotate(math.degrees(self._rotation_angle))
-                    painter.drawEllipse(int(round(-w/2)), int(round(-h/2)), int(round(w)), int(round(h)))
-                    painter.restore()
+                # For freehand mode, draw the polygon path
+                if self._drawing_mode == 'freehand' and self._freehand_points:
+                    # Create a polygon from the freehand points
+                    polygon = QPolygonF()
+                    for point in self._freehand_points:
+                        adjusted_point = QPointF(point.x() - offset_x, point.y() - offset_y)
+                        polygon.append(adjusted_point)
+                    
+                    # Close the polygon by connecting to the first point
+                    if len(polygon) > 2:
+                        painter.drawPolygon(polygon)
+                        # Also draw the bounding box for reference (lighter color)
+                        left, top, w, h = self._bbox
+                        draw_left = float(left) - offset_x
+                        draw_top = float(top) - offset_y
+                        bbox_pen = QPen(QColor(255, 255, 0, 80))
+                        bbox_pen.setWidth(1)
+                        bbox_pen.setStyle(Qt.PenStyle.DashLine)
+                        painter.setPen(bbox_pen)
+                        painter.drawRect(int(round(draw_left)), int(round(draw_top)), 
+                                       int(round(w)), int(round(h)))
+                        # Restore main pen
+                        pen = QPen(QColor(255, 255, 0, 180))
+                        pen.setWidth(3)
+                        painter.setPen(pen)
                 else:
-                    # Draw normal ellipse
-                    painter.drawEllipse(int(round(draw_left)), int(round(draw_top)), int(round(w)), int(round(h)))
-            except Exception:
+                    # Circular mode - draw ellipse
+                    left, top, w, h = self._bbox
+                    draw_left = float(left) - offset_x
+                    draw_top = float(top) - offset_y
+                    if self._rotation_angle != 0.0:
+                        # Draw rotated ellipse
+                        center_x = draw_left + w / 2.0
+                        center_y = draw_top + h / 2.0
+                        painter.save()
+                        painter.translate(center_x, center_y)
+                        painter.rotate(math.degrees(self._rotation_angle))
+                        painter.drawEllipse(int(round(-w/2)), int(round(-h/2)), int(round(w)), int(round(h)))
+                        painter.restore()
+                    else:
+                        # Draw normal ellipse
+                        painter.drawEllipse(int(round(draw_left)), int(round(draw_top)), int(round(w)), int(round(h)))
+            except Exception as e:
+                print(f"Error painting current ROI: {e}")
                 pass
 
         # Draw any saved ROIs on top of the overlay (if visible)
@@ -814,7 +922,14 @@ class CircleRoiTool(QObject):
         """Return (X0,Y0,X1,Y1, mask) where mask is a boolean numpy array
         for pixels inside the ellipse in image coordinates. Returns None if
         ROI is not available or mapping info missing.
+        
+        For freehand ROIs, returns a mask for pixels inside the polygon.
         """
+        # Check if this is a freehand ROI
+        if self._drawing_mode == 'freehand' and self._freehand_points:
+            return self._get_freehand_mask()
+        
+        # Otherwise use ellipse mask
         img_coords = self._current_roi_image_coords()
         if img_coords is None:
             return None
@@ -857,3 +972,83 @@ class CircleRoiTool(QObject):
         mask = (nx * nx + ny * ny) <= 1.0
         mask = mask.T
         return (X0, Y0, X1, Y1, mask)
+
+    def _get_freehand_mask(self):
+        """Return (X0,Y0,X1,Y1, mask) for freehand polygon ROI."""
+        if not self._freehand_points or len(self._freehand_points) < 3:
+            return None
+        
+        # Convert freehand points from label coords to image coords
+        img_points = []
+        for point in self._freehand_points:
+            img_point = self._label_point_to_image_coords(point)
+            if img_point is not None:
+                img_points.append(img_point)
+        
+        if len(img_points) < 3:
+            return None
+        
+        # Get bounding box in image coordinates
+        img_coords = self._current_roi_image_coords()
+        if img_coords is None:
+            return None
+        X0, Y0, X1, Y1 = img_coords
+        H = Y1 - Y0
+        W = X1 - X0
+        if H <= 0 or W <= 0:
+            return None
+        
+        # Create mask using polygon
+        from matplotlib.path import Path
+        
+        # Create a grid of points within the bounding box
+        y_coords, x_coords = np.meshgrid(np.arange(Y0, Y1), np.arange(X0, X1))
+        points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
+        
+        # Create polygon path
+        polygon_path = Path(img_points)
+        
+        # Check which points are inside the polygon
+        mask_flat = polygon_path.contains_points(points)
+        mask = mask_flat.reshape(W, H).T
+        
+        return (X0, Y0, X1, Y1, mask)
+
+    def _label_point_to_image_coords(self, point):
+        """Convert a point from label coordinates to image coordinates."""
+        if self._draw_rect is None or self._img_w is None or self._img_h is None:
+            return None
+        
+        # Get point position relative to draw_rect
+        rel_x = float(point.x() - self._draw_rect.left())
+        rel_y = float(point.y() - self._draw_rect.top())
+        
+        # Normalize to [0, 1]
+        pw = float(self._draw_rect.width())
+        ph = float(self._draw_rect.height())
+        norm_x = rel_x / max(1.0, pw)
+        norm_y = rel_y / max(1.0, ph)
+        
+        # Scale to image coordinates
+        img_x = norm_x * self._img_w
+        img_y = norm_y * self._img_h
+        
+        # Clamp to image bounds
+        img_x = max(0.0, min(float(self._img_w), img_x))
+        img_y = max(0.0, min(float(self._img_h), img_y))
+        
+        return (img_x, img_y)
+
+    def get_freehand_points_image_coords(self):
+        """Return the freehand points in image coordinates.
+        Returns a list of (x, y) tuples or None if not in freehand mode."""
+        if self._drawing_mode != 'freehand' or not self._freehand_points:
+            return None
+        
+        img_points = []
+        for point in self._freehand_points:
+            img_point = self._label_point_to_image_coords(point)
+            if img_point is not None:
+                img_points.append(img_point)
+        
+        return img_points if img_points else None
