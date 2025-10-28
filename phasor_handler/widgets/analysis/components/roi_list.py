@@ -334,6 +334,9 @@ class RoiListWidget(QWidget):
                     self.main_window.roi_tool._rotation_angle = 0.0
                     self.main_window.roi_tool._paint_overlay()
                     
+                    # Update UI toggle buttons to match the freehand mode
+                    self._sync_ui_toggle_buttons('freehand')
+                    
                     print(f"Selected freehand ROI {row + 1} with {len(freehand_points)} points for editing")
             elif roi_type == 'rectangular':
                 # Restore rectangular ROI
@@ -344,6 +347,9 @@ class RoiListWidget(QWidget):
                     self.main_window.roi_tool.show_bbox_image_coords(xyxy, rotation)
                     self.main_window.roi_tool._rotation_angle = rotation
                     self.main_window.roi_tool._freehand_points = []  # Clear any freehand points
+                    
+                    # Update UI toggle buttons to match the rectangular mode
+                    self._sync_ui_toggle_buttons('rectangular')
                     
                 print(f"Selected rectangular ROI {row + 1} for editing")
                 print(f"DEBUG: Restored xyxy: {xyxy}, rotation: {rotation}")
@@ -356,6 +362,9 @@ class RoiListWidget(QWidget):
                     self.main_window.roi_tool.show_bbox_image_coords(xyxy, rotation)
                     self.main_window.roi_tool._rotation_angle = rotation
                     self.main_window.roi_tool._freehand_points = []  # Clear any freehand points
+                    
+                    # Update UI toggle buttons to match the circular mode
+                    self._sync_ui_toggle_buttons('circular')
                     
                 print(f"Selected circular ROI {row + 1} for editing")
                 print(f"DEBUG: Restored xyxy: {xyxy}, rotation: {rotation}")
@@ -809,6 +818,58 @@ class RoiListWidget(QWidget):
                 self.main_window.roi_tool.set_show_labels(show)
         except Exception:
             pass
+    
+    def _sync_ui_toggle_buttons(self, mode):
+        """Sync the UI toggle buttons to match the given mode.
+        
+        Args:
+            mode: One of 'circular', 'rectangular', or 'freehand'
+        """
+        try:
+            # Get the analysis widget (parent of this component)
+            analysis_widget = None
+            
+            # Try to find the analysis widget through the main window
+            if hasattr(self.main_window, 'analysis_widget'):
+                analysis_widget = self.main_window.analysis_widget
+            else:
+                # Fallback: navigate through parent hierarchy
+                parent = self.parent()
+                while parent is not None:
+                    if hasattr(parent, 'circular_roi_button'):
+                        analysis_widget = parent
+                        break
+                    parent = parent.parent()
+            
+            if analysis_widget is None:
+                print("DEBUG: Could not find analysis widget to sync toggle buttons")
+                return
+            
+            # Block signals to prevent triggering the toggled event
+            if hasattr(analysis_widget, 'circular_roi_button'):
+                analysis_widget.circular_roi_button.blockSignals(True)
+                analysis_widget.circular_roi_button.setChecked(mode == 'circular')
+                analysis_widget.circular_roi_button.blockSignals(False)
+                analysis_widget._circular_roi = (mode == 'circular')
+            
+            if hasattr(analysis_widget, 'rectangular_roi_button'):
+                analysis_widget.rectangular_roi_button.blockSignals(True)
+                analysis_widget.rectangular_roi_button.setChecked(mode == 'rectangular')
+                analysis_widget.rectangular_roi_button.blockSignals(False)
+                analysis_widget._rectangular_roi = (mode == 'rectangular')
+            
+            if hasattr(analysis_widget, 'freehand_roi_button'):
+                analysis_widget.freehand_roi_button.blockSignals(True)
+                analysis_widget.freehand_roi_button.setChecked(mode == 'freehand')
+                analysis_widget.freehand_roi_button.blockSignals(False)
+                analysis_widget._freehand_roi = (mode == 'freehand')
+            
+            print(f"DEBUG: Synced UI toggle buttons to {mode} mode")
+            
+        except Exception as e:
+            print(f"DEBUG: Error syncing UI toggle buttons: {e}")
+            import traceback
+            traceback.print_exc()
     
     def auto_select_roi_by_click(self, roi_index):
         """Automatically select a ROI from the list when clicked on the image."""

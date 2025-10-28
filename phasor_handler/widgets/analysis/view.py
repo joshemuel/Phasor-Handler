@@ -1,6 +1,3 @@
-# TODO Implement better ROI drawing
-# TODO Compartmentalize the image functionalities better
-
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
     QPushButton, QSlider, QSizePolicy, QFileDialog, QMessageBox, 
