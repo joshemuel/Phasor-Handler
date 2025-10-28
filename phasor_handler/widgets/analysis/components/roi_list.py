@@ -170,7 +170,12 @@ class RoiListWidget(QWidget):
                 existing_roi['points'] = freehand_points
                 # Remove rotation for freehand ROIs
                 existing_roi.pop('rotation', None)
-            else:
+            elif drawing_mode == 'rectangular':
+                existing_roi['type'] = 'rectangular'
+                existing_roi['rotation'] = rotation_angle
+                # Remove points for rectangular ROIs
+                existing_roi.pop('points', None)
+            else:  # circular
                 existing_roi['type'] = 'circular'
                 existing_roi['rotation'] = rotation_angle
                 # Remove points for circular ROIs
@@ -229,7 +234,11 @@ class RoiListWidget(QWidget):
                 roi_data['type'] = 'freehand'
                 roi_data['points'] = freehand_points
                 print(f"Created new {name} as freehand ROI with {len(freehand_points)} points")
-            else:
+            elif drawing_mode == 'rectangular':
+                roi_data['type'] = 'rectangular'
+                roi_data['rotation'] = rotation_angle
+                print(f"Created new {name} as rectangular ROI")
+            else:  # circular
                 roi_data['type'] = 'circular'
                 roi_data['rotation'] = rotation_angle
                 print(f"Created new {name} as circular ROI")
@@ -326,6 +335,18 @@ class RoiListWidget(QWidget):
                     self.main_window.roi_tool._paint_overlay()
                     
                     print(f"Selected freehand ROI {row + 1} with {len(freehand_points)} points for editing")
+            elif roi_type == 'rectangular':
+                # Restore rectangular ROI
+                rotation = saved.get('rotation', 0.0)
+                if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
+                    # Set drawing mode to rectangular
+                    self.main_window.roi_tool.set_drawing_mode('rectangular')
+                    self.main_window.roi_tool.show_bbox_image_coords(xyxy, rotation)
+                    self.main_window.roi_tool._rotation_angle = rotation
+                    self.main_window.roi_tool._freehand_points = []  # Clear any freehand points
+                    
+                print(f"Selected rectangular ROI {row + 1} for editing")
+                print(f"DEBUG: Restored xyxy: {xyxy}, rotation: {rotation}")
             else:
                 # Restore circular ROI
                 rotation = saved.get('rotation', 0.0)

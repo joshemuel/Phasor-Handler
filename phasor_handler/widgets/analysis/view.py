@@ -179,14 +179,21 @@ class AnalysisWidget(QWidget):
         roi_tool_group = QGroupBox("ROI Drawing Tool")
         roi_tool_layout = QVBoxLayout()
 
-        self.circular_roi_button = QPushButton("Circle ROI Tool")
+        self.circular_roi_button = QPushButton("Circular")
         self.circular_roi_button.setEnabled(False)
         self.circular_roi_button.setCheckable(True)
         self.circular_roi_button.setChecked(True)  # Default mode
         self._circular_roi = True
         self.circular_roi_button.toggled.connect(lambda checked, m='circular': self._on_roi_tool_toggled(m, checked))
 
-        self.freehand_roi_button = QPushButton("Freehand ROI Tool")
+        self.rectangular_roi_button = QPushButton("Rectangular")
+        self.rectangular_roi_button.setEnabled(False)
+        self.rectangular_roi_button.setCheckable(True)
+        self.rectangular_roi_button.setChecked(False)
+        self._rectangular_roi = False
+        self.rectangular_roi_button.toggled.connect(lambda checked, m='rectangular': self._on_roi_tool_toggled(m, checked))
+
+        self.freehand_roi_button = QPushButton("Freeform")
         self.freehand_roi_button.setEnabled(False)
         self.freehand_roi_button.setCheckable(True)
         self.freehand_roi_button.setChecked(False)
@@ -194,6 +201,7 @@ class AnalysisWidget(QWidget):
         self.freehand_roi_button.toggled.connect(lambda checked, m='freehand': self._on_roi_tool_toggled(m, checked))
 
         roi_tool_layout.addWidget(self.circular_roi_button)
+        roi_tool_layout.addWidget(self.rectangular_roi_button)
         roi_tool_layout.addWidget(self.freehand_roi_button)
         roi_tool_group.setLayout(roi_tool_layout)
 
@@ -551,7 +559,7 @@ class AnalysisWidget(QWidget):
 
     def _on_roi_tool_toggled(self, mode, checked):
         """Handle toggling of the ROI tool buttons so only one drawing mode
-        is active at a time. mode is one of 'circular', 'freehand'.
+        is active at a time. mode is one of 'circular', 'rectangular', 'freehand'.
         """
         try:
             # Turn off other modes
@@ -560,6 +568,12 @@ class AnalysisWidget(QWidget):
                 self.circular_roi_button.setChecked(False)
                 self.circular_roi_button.blockSignals(False)
                 self._circular_roi = False
+
+            if mode != 'rectangular' and getattr(self, 'rectangular_roi_button', None) is not None:
+                self.rectangular_roi_button.blockSignals(True)
+                self.rectangular_roi_button.setChecked(False)
+                self.rectangular_roi_button.blockSignals(False)
+                self._rectangular_roi = False
 
             if mode != 'freehand' and getattr(self, 'freehand_roi_button', None) is not None:
                 self.freehand_roi_button.blockSignals(True)
@@ -573,6 +587,11 @@ class AnalysisWidget(QWidget):
                 if checked:
                     self.roi_tool.set_drawing_mode('circular')
                     print("Switched to circular ROI drawing mode")
+            elif mode == 'rectangular':
+                self._rectangular_roi = bool(checked)
+                if checked:
+                    self.roi_tool.set_drawing_mode('rectangular')
+                    print("Switched to rectangular ROI drawing mode")
             elif mode == 'freehand':
                 self._freehand_roi = bool(checked)
                 if checked:
@@ -581,12 +600,17 @@ class AnalysisWidget(QWidget):
 
             # If the user turned on one mode, ensure others are off at the flag level
             if self._circular_roi:
+                self._rectangular_roi = False
+                self._freehand_roi = False
+            if self._rectangular_roi:
+                self._circular_roi = False
                 self._freehand_roi = False
             if self._freehand_roi:
                 self._circular_roi = False
+                self._rectangular_roi = False
                 
             # If no mode is active (user unchecked), default back to circular
-            if not self._circular_roi and not self._freehand_roi:
+            if not self._circular_roi and not self._rectangular_roi and not self._freehand_roi:
                 self.circular_roi_button.blockSignals(True)
                 self.circular_roi_button.setChecked(True)
                 self.circular_roi_button.blockSignals(False)
@@ -651,6 +675,7 @@ class AnalysisWidget(QWidget):
         self.zproj_max_button.setEnabled(False)
         self.zproj_mean_button.setEnabled(False)
         self.circular_roi_button.setEnabled(False)
+        self.rectangular_roi_button.setEnabled(False)
         self.freehand_roi_button.setEnabled(False)
         self.view_metadata_button.setEnabled(False)
         self.scale_bar_checkbox.setEnabled(False)
@@ -711,6 +736,7 @@ class AnalysisWidget(QWidget):
         
         # Enable ROI tool buttons when an image is loaded
         self.circular_roi_button.setEnabled(True)
+        self.rectangular_roi_button.setEnabled(True)
         self.freehand_roi_button.setEnabled(True)
         
         # Enable BnC controls when an image is loaded

@@ -9,14 +9,15 @@ import math
 
 
 class CircleRoiTool(QObject):
-    """Ellipse/Freehand ROI tool attached to a QLabel showing a scaled pixmap.
+    """Ellipse/Freehand/Rectangular ROI tool attached to a QLabel showing a scaled pixmap.
 
     Internal bbox is stored as a float tuple (left, top, width, height).
     Translation uses QPointF anchor and bbox_origin floats so moving does
     not introduce rounding drift that changes size.
     
-    Supports two drawing modes:
+    Supports three drawing modes:
     - 'circular': Draw elliptical ROIs (default)
+    - 'rectangular': Draw rectangular ROIs (bounding box)
     - 'freehand': Draw freeform polygonal ROIs by tracking mouse path
     """
     roiChanged = pyqtSignal(tuple)   # (x0, y0, x1, y1) in image coords (during drag)
@@ -92,8 +93,8 @@ class CircleRoiTool(QObject):
         self._base_pixmap = pm
 
     def set_drawing_mode(self, mode: str):
-        """Set the drawing mode: 'circular' or 'freehand'."""
-        if mode in ('circular', 'freehand'):
+        """Set the drawing mode: 'circular', 'rectangular', or 'freehand'."""
+        if mode in ('circular', 'rectangular', 'freehand'):
             self._drawing_mode = mode
             print(f"Drawing mode set to: {mode}")
         else:
@@ -408,7 +409,7 @@ class CircleRoiTool(QObject):
                     # Update bbox to encompass all freehand points
                     self._update_bbox_from_freehand_points()
                 else:
-                    # Circular mode - update bbox from start/current points
+                    # Circular and rectangular modes - update bbox from start/current points
                     self._update_bbox_from_points()
                 
                 self._paint_overlay()
@@ -651,6 +652,23 @@ class CircleRoiTool(QObject):
                         pen = QPen(QColor(255, 255, 0, 180))
                         pen.setWidth(3)
                         painter.setPen(pen)
+                elif self._drawing_mode == 'rectangular':
+                    # Rectangular mode - draw rectangle (bounding box)
+                    left, top, w, h = self._bbox
+                    draw_left = float(left) - offset_x
+                    draw_top = float(top) - offset_y
+                    if self._rotation_angle != 0.0:
+                        # Draw rotated rectangle
+                        center_x = draw_left + w / 2.0
+                        center_y = draw_top + h / 2.0
+                        painter.save()
+                        painter.translate(center_x, center_y)
+                        painter.rotate(math.degrees(self._rotation_angle))
+                        painter.drawRect(int(round(-w/2)), int(round(-h/2)), int(round(w)), int(round(h)))
+                        painter.restore()
+                    else:
+                        # Draw normal rectangle
+                        painter.drawRect(int(round(draw_left)), int(round(draw_top)), int(round(w)), int(round(h)))
                 else:
                     # Circular mode - draw ellipse
                     left, top, w, h = self._bbox
@@ -725,6 +743,21 @@ class CircleRoiTool(QObject):
                                 
                                 if len(polygon) >= 3:
                                     painter.drawPolygon(polygon)
+                        elif roi_type == 'rectangular':
+                            # Draw rectangular ROI
+                            rotation_angle = saved.get('rotation', 0.0)
+                            if rotation_angle != 0.0:
+                                # Draw rotated rectangle
+                                center_x = px0 + lw / 2.0
+                                center_y = py0 + lh / 2.0
+                                painter.save()
+                                painter.translate(center_x, center_y)
+                                painter.rotate(math.degrees(rotation_angle))
+                                painter.drawRect(int(round(-lw/2)), int(round(-lh/2)), int(round(lw)), int(round(lh)))
+                                painter.restore()
+                            else:
+                                # Draw normal rectangle
+                                painter.drawRect(int(round(px0)), int(round(py0)), int(round(lw)), int(round(lh)))
                         else:
                             # Draw circular/elliptical ROI
                             rotation_angle = saved.get('rotation', 0.0)
@@ -999,14 +1032,20 @@ class CircleRoiTool(QObject):
 
     def get_ellipse_mask(self):
         """Return (X0,Y0,X1,Y1, mask) where mask is a boolean numpy array
-        for pixels inside the ellipse in image coordinates. Returns None if
+        for pixels inside the ROI in image coordinates. Returns None if
         ROI is not available or mapping info missing.
         
         For freehand ROIs, returns a mask for pixels inside the polygon.
+        For rectangular ROIs, returns a mask for pixels inside the rectangle.
+        For circular ROIs, returns a mask for pixels inside the ellipse.
         """
         # Check if this is a freehand ROI
         if self._drawing_mode == 'freehand' and self._freehand_points:
             return self._get_freehand_mask()
+        
+        # Check if this is a rectangular ROI
+        if self._drawing_mode == 'rectangular':
+            return self._get_rectangular_mask()
         
         # Otherwise use ellipse mask
         img_coords = self._current_roi_image_coords()
@@ -1090,6 +1129,50 @@ class CircleRoiTool(QObject):
         # Check which points are inside the polygon
         mask_flat = polygon_path.contains_points(points)
         mask = mask_flat.reshape(W, H).T
+        
+        return (X0, Y0, X1, Y1, mask)
+
+    def _get_rectangular_mask(self):
+        """Return (X0,Y0,X1,Y1, mask) for rectangular ROI."""
+        img_coords = self._current_roi_image_coords()
+        if img_coords is None:
+            return None
+        X0, Y0, X1, Y1 = img_coords
+        H = Y1 - Y0
+        W = X1 - X0
+        if H <= 0 or W <= 0:
+            return None
+        
+        # For rectangular ROI without rotation, all pixels in bbox are included
+        if self._rotation_angle == 0.0:
+            mask = np.ones((H, W), dtype=bool)
+            return (X0, Y0, X1, Y1, mask)
+        
+        # For rotated rectangle, need to check which pixels are inside
+        cx = (X0 + X1) / 2.0
+        cy = (Y0 + Y1) / 2.0
+        half_w = (X1 - X0) / 2.0
+        half_h = (Y1 - Y0) / 2.0
+        
+        # Create a grid of points
+        ys = np.arange(Y0, Y1, dtype=float)
+        xs = np.arange(X0, X1, dtype=float)
+        yy, xx = np.meshgrid(ys, xs, indexing='xy')
+        
+        # Translate to center
+        xx_centered = xx - cx
+        yy_centered = yy - cy
+        
+        # Apply inverse rotation to align with rectangle axes
+        cos_angle = math.cos(-self._rotation_angle)
+        sin_angle = math.sin(-self._rotation_angle)
+        
+        xx_rotated = xx_centered * cos_angle - yy_centered * sin_angle
+        yy_rotated = xx_centered * sin_angle + yy_centered * cos_angle
+        
+        # Check if points are inside the rectangle
+        mask = (np.abs(xx_rotated) <= half_w) & (np.abs(yy_rotated) <= half_h)
+        mask = mask.T
         
         return (X0, Y0, X1, Y1, mask)
 
