@@ -211,6 +211,7 @@ class TraceplotWidget(QWidget):
         
         if mask_result is None:
             # Fallback to rectangular region
+            print(f"DEBUG: No masks found. Using rectangular ROI for signal extraction")
             x0, y0, x1, y1 = self.main_window._last_roi_xyxy
             def stack3d(a):
                 a = np.asarray(a).squeeze()
