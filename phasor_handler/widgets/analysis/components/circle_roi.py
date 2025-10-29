@@ -1,5 +1,3 @@
-# TODO: Make it so that ROIs can be removed seamlessly
-
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QRect, QPointF
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont, QPainterPath, QPolygonF
 from PyQt6.QtWidgets import QLabel
@@ -37,6 +35,10 @@ class CircleRoiTool(QObject):
         self._img_w = None
         self._img_h = None
         self._base_pixmap = None
+        
+        # Margin in pixels to allow ROIs to extend beyond the visible frame
+        # NOT IMPLEMENTED YET
+        self._boundary_margin = 0.0  # pixels
 
         # ROI/drawing state
         self._start_pos = None   # QPointF (press)
@@ -53,7 +55,6 @@ class CircleRoiTool(QObject):
         self._freehand_points = []  # List of QPointF for freehand path
 
         # persistent saved ROIs: list of dicts with keys 'name','xyxy','color'
-        # color may be a QColor or (r,g,b,a) tuple
         self._saved_rois = []
 
         # stimulus ROIs: list of dicts with keys 'id','xyxy','name'
@@ -72,6 +73,7 @@ class CircleRoiTool(QObject):
         self._bbox_origin = None       # (left, top, w, h) float tuple
         self._rotation_anchor = None   # QPointF for rotation center
         self._rotation_origin = None   # original angle before rotation starts
+        self._rotation_center_origin = None  # QPointF - fixed center point for rotation
         self._freehand_points_origin = None  # List of original freehand points for transformations
         # whether to show the small mode text in the overlay (can be toggled by view)
         self._show_mode_text = True
@@ -310,7 +312,7 @@ class CircleRoiTool(QObject):
                 return True
 
             # RIGHT CLICK: Used for editing existing ROIs (select, translate, rotate)
-            if event.button() == Qt.MouseButton.RightButton:
+            if event.button() == Qt.MouseButton.RightButton and self._mode != 'draw':
                 p = event.position()  # QPointF
                 
                 # First, check if we're clicking on any saved ROI
@@ -350,6 +352,8 @@ class CircleRoiTool(QObject):
                                     self._dragging = True
                                     self._rotation_anchor = p
                                     self._rotation_origin = self._rotation_angle
+                                    # Save the original center point for consistent rotation
+                                    self._rotation_center_origin = self._get_bbox_center()
                                     # Save original freehand points for transformation
                                     if self._freehand_points:
                                         self._freehand_points_origin = [QPointF(pt.x(), pt.y()) for pt in self._freehand_points]
@@ -376,6 +380,8 @@ class CircleRoiTool(QObject):
                             self._dragging = True
                             self._rotation_anchor = p
                             self._rotation_origin = self._rotation_angle
+                            # Save the original center point for consistent rotation
+                            self._rotation_center_origin = self._get_bbox_center()
                             # Save original freehand points for transformation
                             if self._freehand_points:
                                 self._freehand_points_origin = [QPointF(pt.x(), pt.y()) for pt in self._freehand_points]
@@ -427,20 +433,7 @@ class CircleRoiTool(QObject):
                 ox, oy, ow, oh = self._bbox_origin
                 new_left = ox + dx
                 new_top = oy + dy
-                # constrain inside draw_rect if available
-                if self._draw_rect is not None:
-                    dl = float(self._draw_rect.left())
-                    dt = float(self._draw_rect.top())
-                    dr = float(self._draw_rect.left() + self._draw_rect.width())
-                    db = float(self._draw_rect.top() + self._draw_rect.height())
-                    if new_left < dl:
-                        new_left = dl
-                    if new_top < dt:
-                        new_top = dt
-                    if new_left + ow > dr:
-                        new_left = dr - ow
-                    if new_top + oh > db:
-                        new_top = db - oh
+                
                 self._bbox = (new_left, new_top, ow, oh)
                 
                 # Also translate freehand points if they exist
@@ -449,6 +442,9 @@ class CircleRoiTool(QObject):
                     for pt in self._freehand_points_origin:
                         new_pt = QPointF(pt.x() + dx, pt.y() + dy)
                         self._freehand_points.append(new_pt)
+                    
+                    # Recalculate bbox from translated points to ensure center alignment
+                    self._update_bbox_from_freehand_points()
                 
                 self._paint_overlay()
                 xyxy = self._current_roi_image_coords()
@@ -457,11 +453,13 @@ class CircleRoiTool(QObject):
                 return True
 
             elif self._mode == 'rotate' and self._rotation_anchor is not None:
-                # calculate rotation angle based on mouse movement around bbox center
-                center = self._get_bbox_center()
+                # Use the fixed original center for rotation, not the dynamically changing bbox center
+                center = self._rotation_center_origin if self._rotation_center_origin is not None else self._get_bbox_center()
                 if center is not None:
                     angle_delta = self._calculate_rotation_angle(self._rotation_anchor, pos, center)
-                    self._rotation_angle = self._rotation_origin + angle_delta
+                    proposed_angle = self._rotation_origin + angle_delta
+                    
+                    self._rotation_angle = proposed_angle
                     
                     # Also rotate freehand points if they exist
                     if self._freehand_points_origin:
@@ -470,7 +468,7 @@ class CircleRoiTool(QObject):
                         cy = center.y()
                         
                         for pt in self._freehand_points_origin:
-                            # Translate to origin
+                            # Translate to origin (using ORIGINAL center)
                             px = pt.x() - cx
                             py = pt.y() - cy
                             
@@ -483,6 +481,9 @@ class CircleRoiTool(QObject):
                             # Translate back
                             new_pt = QPointF(px_rot + cx, py_rot + cy)
                             self._freehand_points.append(new_pt)
+                        
+                        # Recalculate bbox from rotated points to properly encompass the rotated polygon
+                        self._update_bbox_from_freehand_points()
                     
                     self._paint_overlay()
                     xyxy = self._current_roi_image_coords()
@@ -515,8 +516,19 @@ class CircleRoiTool(QObject):
                         self._paint_overlay()
                         return True
                 else:
-                    # Circular mode
+                    # Circular/rectangular mode
                     self._update_bbox_from_points()
+                
+                # Check if ROI is entirely outside the image - if so, restart drawing
+                if self._is_entirely_outside_image():
+                    print("ROI is entirely outside the image - discarding and restarting")
+                    self._freehand_points = []
+                    self._bbox = None
+                    self._mode = None
+                    self._start_pos = None
+                    self._current_pos = None
+                    self._paint_overlay()
+                    return True
                 
                 self._paint_overlay(final=True)
                 xyxy = self._current_roi_image_coords()
@@ -531,6 +543,19 @@ class CircleRoiTool(QObject):
                 self._translate_anchor = None
                 self._bbox_origin = None
                 self._freehand_points_origin = None
+                
+                # Check if ROI is entirely outside the image after translation - if so, restart
+                if self._is_entirely_outside_image():
+                    print("ROI moved entirely outside the image - discarding and restarting")
+                    self._freehand_points = []
+                    self._bbox = None
+                    self._mode = None
+                    self._start_pos = None
+                    self._current_pos = None
+                    self._rotation_angle = 0.0
+                    self._paint_overlay()
+                    return True
+                
                 xyxy = self._current_roi_image_coords()
                 if xyxy is not None:
                     self.roiFinalized.emit(xyxy)
@@ -542,7 +567,21 @@ class CircleRoiTool(QObject):
                 # finalize rotation
                 self._rotation_anchor = None
                 self._rotation_origin = None
+                self._rotation_center_origin = None
                 self._freehand_points_origin = None
+                
+                # Check if ROI is entirely outside the image after rotation - if so, restart
+                if self._is_entirely_outside_image():
+                    print("ROI rotated entirely outside the image - discarding and restarting")
+                    self._freehand_points = []
+                    self._bbox = None
+                    self._mode = None
+                    self._start_pos = None
+                    self._current_pos = None
+                    self._rotation_angle = 0.0
+                    self._paint_overlay()
+                    return True
+                
                 xyxy = self._current_roi_image_coords()
                 if xyxy is not None:
                     self.roiFinalized.emit(xyxy)
@@ -558,16 +597,30 @@ class CircleRoiTool(QObject):
             return False
         return self._draw_rect.contains(posf.toPoint())
 
+    def _is_entirely_outside_image(self):
+        """Check if the current ROI is entirely outside the image bounds.
+        Returns True if the ROI has no overlap with the image at all."""
+        if self._bbox is None or self._draw_rect is None:
+            return False
+        
+        left, top, w, h = self._bbox
+        right = left + w
+        bottom = top + h
+        
+        dl = float(self._draw_rect.left())
+        dt = float(self._draw_rect.top())
+        dr = float(self._draw_rect.left() + self._draw_rect.width())
+        db = float(self._draw_rect.top() + self._draw_rect.height())
+        
+        # Check if bbox is completely outside the draw_rect
+        if right <= dl or left >= dr or bottom <= dt or top >= db:
+            return True
+        
+        return False
+
     def _constrain_to_draw_rect(self, posf):
-        # Accept and return QPointF for sub-pixel precision when possible
-        try:
-            x = float(posf.x())
-            y = float(posf.y())
-        except Exception:
-            p = posf.toPoint()
-            x = float(p.x()); y = float(p.y())
-        # Return raw position (no clamping). Mask/computation will clip later.
-        return QPointF(x, y)
+        # No longer constraining - just return the position as-is
+        return posf
 
     def _update_bbox_from_points(self):
         """Compute rectangular bbox (left,top,w,h) in label coords from start/current QPointF."""
@@ -638,14 +691,17 @@ class CircleRoiTool(QObject):
                         painter.setPen(dashed_pen)
                         painter.drawLine(polygon[len(polygon) - 1], polygon[0])
                         
-                        # Also draw the bounding box for reference (lighter color)
+                        # Draw the axis-aligned bounding box for reference (lighter color)
+                        # For freehand ROIs, bbox is always axis-aligned and encompasses the polygon
                         left, top, w, h = self._bbox
                         draw_left = float(left) - offset_x
                         draw_top = float(top) - offset_y
                         bbox_pen = QPen(QColor(255, 255, 0, 80))
-                        bbox_pen.setWidth(0) # Deactivate for now
+                        bbox_pen.setWidth(1)
                         bbox_pen.setStyle(Qt.PenStyle.DashLine)
                         painter.setPen(bbox_pen)
+                        
+                        # Draw axis-aligned bounding box (no rotation for freehand)
                         painter.drawRect(int(round(draw_left)), int(round(draw_top)), 
                                        int(round(w)), int(round(h)))
                         # Restore main pen

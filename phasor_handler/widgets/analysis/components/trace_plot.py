@@ -9,13 +9,11 @@ This widget encapsulates all trace plotting logic including:
 - Signal extraction and plotting methods
 """
 
-# TODO Make options only raw Fg and Fg - Fog / Fog for single channel recordings
-
 import numpy as np
 import matplotlib.pyplot as plt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-    QComboBox, QSizePolicy, QSpinBox
+    QComboBox, QSizePolicy, QSpinBox, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -32,6 +30,7 @@ class TraceplotWidget(QWidget):
         self.main_window = None  # Will be set by parent
         self._show_time_in_seconds = False  # Track current display mode
         self._frame_vline = None  # Reference to the current frame line
+        self._ylim_user_modified = False  # Track if user has manually changed y-limits
         
         self._init_ui()
         
@@ -56,23 +55,31 @@ class TraceplotWidget(QWidget):
         ylim_label.setSizePolicy(QSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
         ylim_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
-        self.ylim_min_edit = QLineEdit()
-        self.ylim_min_edit.setFixedWidth(50)
+        self.ylim_min_edit = QDoubleSpinBox()
+        self.ylim_min_edit.setFixedWidth(70)
         self.ylim_min_edit.setFixedHeight(20)
-        self.ylim_min_edit.setPlaceholderText("Min")
-        self.ylim_min_edit.editingFinished.connect(self._update_trace_from_roi)
+        self.ylim_min_edit.setRange(-999999.99, 999999.99)
+        self.ylim_min_edit.setSingleStep(0.001)
+        self.ylim_min_edit.setDecimals(3)
+        self.ylim_min_edit.setValue(-0.05)  # Start at a neutral value
+        self.ylim_min_edit.setEnabled(False)  # Disabled until ROI is drawn
+        self.ylim_min_edit.valueChanged.connect(self._on_ylim_changed)
 
-        self.ylim_max_edit = QLineEdit()
-        self.ylim_max_edit.setFixedWidth(50)
+        self.ylim_max_edit = QDoubleSpinBox()
+        self.ylim_max_edit.setFixedWidth(70)
         self.ylim_max_edit.setFixedHeight(20)
-        self.ylim_max_edit.setPlaceholderText("Max")
-        self.ylim_max_edit.editingFinished.connect(self._update_trace_from_roi)
+        self.ylim_max_edit.setRange(-999999.99, 999999.99)
+        self.ylim_max_edit.setSingleStep(0.001)
+        self.ylim_max_edit.setDecimals(3)
+        self.ylim_max_edit.setValue(0.5)  # Start at a neutral value
+        self.ylim_max_edit.setEnabled(False)  # Disabled until ROI is drawn
+        self.ylim_max_edit.valueChanged.connect(self._on_ylim_changed)
 
         ylim_label_inner.addWidget(self.ylim_min_edit)
         ylim_label_inner.addWidget(self.ylim_max_edit)
         ylim_label_inner.addStretch()
 
-        self.reset_ylim_button = QPushButton("Reset")
+        self.reset_ylim_button = QPushButton("Auto")
         self.reset_ylim_button.setFixedWidth(50)
         self.reset_ylim_button.setFixedHeight(20)
         self.reset_ylim_button.clicked.connect(self._reset_ylim)
@@ -194,7 +201,15 @@ class TraceplotWidget(QWidget):
         
         if not has_main_window or not has_current_tif or not has_roi_xyxy:
             print("DEBUG: Early return - missing required data")
-            # clear your plot if you want
+            # Disable y-limit spinboxes when no ROI is drawn
+            if hasattr(self, 'ylim_min_edit'):
+                self.ylim_min_edit.setEnabled(False)
+            if hasattr(self, 'ylim_max_edit'):
+                self.ylim_max_edit.setEnabled(False)
+            if hasattr(self, 'reset_ylim_button'):
+                self.reset_ylim_button.setEnabled(False)
+            # Reset user modification flag when ROI is cleared
+            self._ylim_user_modified = False
             return
         
         print(f"DEBUG: ROI xyxy: {self.main_window._last_roi_xyxy}")
@@ -436,35 +451,53 @@ class TraceplotWidget(QWidget):
             print(f"DEBUG: Error adding stimulation vlines: {e}")
             pass
 
-        # Parse y-limits from the QLineEdits (if present) and apply them
+        # Get the data range for auto-populating y-limits
+        data_min = np.min(metric) if len(metric) > 0 else 0.0
+        data_max = np.max(metric) if len(metric) > 0 else 1.0
+        
+        # Add some padding (5%) to the data range for better visualization
+        data_range = data_max - data_min
+        if data_range > 0:
+            data_min -= data_range * 0.05
+            data_max += data_range * 0.05
+        
+        # Enable spinboxes since we have an ROI drawn
+        # Only auto-set spinbox values if user hasn't manually modified them
         try:
-            def _parse(txt):
-                try:
-                    s = str(txt).strip()
-                    return float(s) if s != '' else None
-                except Exception:
-                    return None
-
-            ymin = None
-            ymax = None
+            should_auto_populate = not getattr(self, '_ylim_user_modified', False)
+            print(f"DEBUG: Y-limit auto-populate: {should_auto_populate}, user_modified flag: {getattr(self, '_ylim_user_modified', False)}")
+            
             if hasattr(self, 'ylim_min_edit'):
-                ymin = _parse(self.ylim_min_edit.text())
+                self.ylim_min_edit.setEnabled(True)
+                # Only auto-populate when user hasn't manually set values
+                if should_auto_populate:
+                    self.ylim_min_edit.blockSignals(True)
+                    self.ylim_min_edit.setValue(data_min)
+                    self.ylim_min_edit.blockSignals(False)
+                    
             if hasattr(self, 'ylim_max_edit'):
-                ymax = _parse(self.ylim_max_edit.text())
+                self.ylim_max_edit.setEnabled(True)
+                # Only auto-populate when user hasn't manually set values
+                if should_auto_populate:
+                    self.ylim_max_edit.blockSignals(True)
+                    self.ylim_max_edit.setValue(data_max)
+                    self.ylim_max_edit.blockSignals(False)
+                
+            if hasattr(self, 'reset_ylim_button'):
+                self.reset_ylim_button.setEnabled(True)
 
-            # If both provided and inverted, swap
-            if ymin is not None and ymax is not None and ymin > ymax:
-                ymin, ymax = ymax, ymin
-
-            if ymin is not None or ymax is not None:
-                # If one side missing, keep current autoscaled value for that side
-                cur = self.trace_ax.get_ylim()
-                if ymin is None:
-                    ymin = cur[0]
-                if ymax is None:
-                    ymax = cur[1]
-                self.trace_ax.set_ylim(ymin, ymax)
-        except Exception:
+            # Apply the y-limits to the plot
+            # Use spinbox values if user has set them, otherwise use data range
+            if should_auto_populate:
+                # Auto mode - use calculated data range
+                self.trace_ax.set_ylim(data_min, data_max)
+            else:
+                # User has set custom values - use spinbox values
+                y_min = self.ylim_min_edit.value() if hasattr(self, 'ylim_min_edit') else data_min
+                y_max = self.ylim_max_edit.value() if hasattr(self, 'ylim_max_edit') else data_max
+                self.trace_ax.set_ylim(y_min, y_max)
+        except Exception as e:
+            print(f"DEBUG: Error setting y-limits: {e}")
             pass
 
         self.trace_fig.tight_layout()
@@ -580,12 +613,34 @@ class TraceplotWidget(QWidget):
         except Exception:
             pass
 
+    def _on_ylim_changed(self):
+        """Handle manual changes to y-limit spinboxes - update plot without recalculating trace."""
+        if not hasattr(self, 'ylim_min_edit') or not hasattr(self, 'ylim_max_edit'):
+            return
+        
+        # Mark that user has manually modified the y-limits
+        self._ylim_user_modified = True
+        
+        try:
+            y_min = self.ylim_min_edit.value()
+            y_max = self.ylim_max_edit.value()
+            
+            # Apply the new limits to the plot
+            if hasattr(self, 'trace_ax') and self.trace_ax is not None:
+                self.trace_ax.set_ylim(y_min, y_max)
+                
+            # Redraw the canvas
+            if hasattr(self, 'trace_canvas') and self.trace_canvas is not None:
+                self.trace_canvas.draw_idle()
+        except Exception as e:
+            print(f"DEBUG: Error updating y-limits: {e}")
+    
     def _reset_ylim(self):
-        """Clear any user-set y-limits and revert to autoscaling."""
-        if hasattr(self, 'ylim_min_edit'):
-            self.ylim_min_edit.setText("")
-        if hasattr(self, 'ylim_max_edit'):
-            self.ylim_max_edit.setText("")
+        """Reset y-limits to the current ROI's data range."""
+        # Clear the user modification flag so values will auto-populate for new ROIs
+        self._ylim_user_modified = False
+        
+        # Trigger a full trace update which will auto-reset to data min/max
         self._update_trace_from_roi()
     
     def _toggle_time_display(self):
@@ -620,6 +675,19 @@ class TraceplotWidget(QWidget):
             self.trace_ax.tick_params(axis='y', colors='white')
             for spine in self.trace_ax.spines.values():
                 spine.set_color('white')
+        
+        # Disable and reset y-limit spinboxes when trace is cleared
+        if hasattr(self, 'ylim_min_edit'):
+            self.ylim_min_edit.setEnabled(False)
+            
+        if hasattr(self, 'ylim_max_edit'):
+            self.ylim_max_edit.setEnabled(False)
+            
+        if hasattr(self, 'reset_ylim_button'):
+            self.reset_ylim_button.setEnabled(False)
+        
+        # Reset user modification flag when trace is cleared
+        self._ylim_user_modified = False
                 
         # Clear the frame vline reference
         if hasattr(self, '_frame_vline'):

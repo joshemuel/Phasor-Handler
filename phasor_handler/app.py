@@ -1,3 +1,7 @@
+# TODO Update ROI boundary for ellipse so that it does not get redefined.
+# TODO include more metadata for mini2p
+# TODO Add fourth tab for trace analysis
+
 import sys
 import os
 import subprocess

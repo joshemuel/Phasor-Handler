@@ -323,8 +323,8 @@ class ImageViewWidget(QWidget):
             return QRect(0, 0, 0, 0)
 
         scale = min(lw / img_w, lh / img_h)
-        sw = int(img_w * scale)  # scaled width
-        sh = int(img_h * scale)  # scaled height
+        sw = round(img_w * scale)  # scaled width - use round() instead of int() to avoid truncation errors
+        sh = round(img_h * scale)  # scaled height - use round() instead of int() to avoid truncation errors
         x = (lw - sw) // 2
         y = (lh - sh) // 2
 
