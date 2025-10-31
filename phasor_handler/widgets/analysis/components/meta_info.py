@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont
 import json
+import re
 
 
 class MetadataViewer(QDialog):
@@ -326,10 +327,14 @@ class MetadataViewer(QDialog):
         for key in image_keys:
             if key in self.metadata:
                 value = self.metadata[key]
-                if key == "pixel_size": key = "Pixel Size (µm)"
+                if key == "pixel_size": 
+                    key = "Pixel Size (µm)"
+                    value = re.sub(r'[^0-9.]+', '', str(value))
                 elif key == "FOV_size": 
                     key = "FOV Size (µm)"
-                    value = value[:-7]
+                    # Parse FOV_size to format as "206 x 176" (without μm on individual values)
+                    # Example input: "206μm x 176μm"
+                    value = str(value).replace('μm', '').replace('um', '').replace('microns', '').strip()
 
                 self.add_info_row(self.image_layout, row, key.replace('_', ' '), 
                                 str(value))

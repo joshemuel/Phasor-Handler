@@ -303,25 +303,58 @@ class TraceplotWidget(QWidget):
         self.trace_ax.cla()
 
         # Compute metric depending on available channels and selected formula
-        # If red channel missing, switch to (Fg - Fo)/Fo (index 1) and disable other choices
+        # If red channel missing, show only single-channel formulas
         if sig2 is None:
-            # Single-channel data: use (Fg - Fo)/Fo
-            try:
-                # set dropdown to index 1 (Fg - Fo / Fo) but do not allow changing it
-                if self.formula_dropdown.count() > 1:
-                    # If index argument was provided override, respect it, otherwise set selection
-                    if index is None:
-                        self.formula_dropdown.setCurrentIndex(1)
-                self.formula_dropdown.setEnabled(False)
-            except Exception:
-                pass
+            # Single-channel data: limit dropdown to (Fg - Fo)/Fo and raw Fg only
+            # Only modify dropdown if it currently has more than 2 items (switching from dual to single channel)
+            if self.formula_dropdown.count() > 2:
+                self.formula_dropdown.blockSignals(True)
+                current_index = self.formula_dropdown.currentIndex()
+                
+                # Clear and repopulate with single-channel options only
+                self.formula_dropdown.clear()
+                self.formula_dropdown.addItem("(Fg - Fog) / Fog")  # Index 0 for single channel
+                self.formula_dropdown.addItem("Fg only")            # Index 1 for single channel
+                
+                # Set appropriate default selection based on previous selection
+                if current_index == 2:  # Was "Fg only"
+                    self.formula_dropdown.setCurrentIndex(1)
+                else:  # Default to (Fg - Fog) / Fog
+                    self.formula_dropdown.setCurrentIndex(0)
+                
+                self.formula_dropdown.blockSignals(False)
+                print("DEBUG: Switched to single-channel formula dropdown")
 
-            # Safe denom: avoid division by zero
-            denom_val = Fog if (Fog is not None and Fog != 0) else 1e-6
-            metric = (sig1 - Fog) / denom_val
+            # Calculate metric based on selected formula
+            formula_index = self.formula_dropdown.currentIndex() if index is None else index
+            if formula_index == 1:  # Fg only (raw)
+                metric = sig1
+            else:  # (Fg - Fog) / Fog (default, index 0)
+                denom_val = Fog if (Fog is not None and Fog != 0) else 1e-6
+                metric = (sig1 - Fog) / denom_val
         else:
-            # Two-channel data: enable formula selection
-            self.formula_dropdown.setEnabled(True)
+            # Two-channel data: restore all formula options
+            # Only modify dropdown if it currently has 2 items (switching from single to dual channel)
+            if self.formula_dropdown.count() == 2:
+                self.formula_dropdown.blockSignals(True)
+                current_index = self.formula_dropdown.currentIndex()
+                
+                # Clear and repopulate with all formula options
+                self.formula_dropdown.clear()
+                self.formula_dropdown.addItem("Fg - Fog / Fr")      # Index 0
+                self.formula_dropdown.addItem("Fg - Fog / Fog")     # Index 1
+                self.formula_dropdown.addItem("Fg only")            # Index 2
+                self.formula_dropdown.addItem("Fr only")            # Index 3
+                
+                # Restore appropriate selection based on previous selection
+                if current_index == 1:  # Was "Fg only" in single-channel mode
+                    self.formula_dropdown.setCurrentIndex(2)  # Set to "Fg only" in two-channel mode
+                else:  # Was "(Fg - Fog) / Fog"
+                    self.formula_dropdown.setCurrentIndex(1)  # Keep as "(Fg - Fog) / Fog"
+                
+                self.formula_dropdown.blockSignals(False)
+                print("DEBUG: Switched to dual-channel formula dropdown")
+            
             formula_index = self.formula_dropdown.currentIndex() if index is None else index
             if formula_index == 0:
                 denom = sig2.copy().astype(np.float32)
@@ -377,16 +410,61 @@ class TraceplotWidget(QWidget):
                                     print(f"DEBUG: First few time stamps: {time_stamps[:min(5, len(time_stamps))]}")
                                 break
                 
-                if time_stamps is not None and len(time_stamps) >= len(metric):
-                    # Use time stamps as x-axis (convert from ms to seconds)
-                    x_values = np.array(time_stamps[:len(metric)]) / 1000.0
-                    x_label = "Time (s)"
-                    # Convert current frame position to time
-                    if current_frame < len(time_stamps):
-                        current_x_pos = time_stamps[current_frame] / 1000.0
+                # Check if we have valid time stamps (not empty and has enough data)
+                has_valid_timestamps = (time_stamps is not None and 
+                                       hasattr(time_stamps, '__len__') and 
+                                       len(time_stamps) > 0 and
+                                       len(time_stamps) >= len(metric))
+                
+                if has_valid_timestamps:
+                    # Parse time stamps - they could be numbers (ms or seconds) or datetime strings
+                    time_array = np.array(time_stamps[:len(metric)])
+                    
+                    # Check if timestamps are strings (datetime format) or numbers
+                    if isinstance(time_stamps[0], str):
+                        # Parse datetime strings and convert to relative seconds
+                        from datetime import datetime
+                        try:
+                            # Parse the datetime strings
+                            dt_objects = []
+                            for ts in time_stamps[:len(metric)]:
+                                # Handle format like '2025-10-26 19:08:38.626'
+                                dt = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f')
+                                dt_objects.append(dt)
+                            
+                            # Convert to seconds relative to first timestamp
+                            first_dt = dt_objects[0]
+                            x_values = np.array([(dt - first_dt).total_seconds() for dt in dt_objects])
+                            print(f"DEBUG: Parsed datetime timestamps, duration: {x_values[-1]:.2f}s")
+                        except Exception as e:
+                            print(f"DEBUG: Error parsing datetime strings: {e}")
+                            # Fall back to frame numbers
+                            show_time = False
+                            x_values = None
                     else:
-                        current_x_pos = time_stamps[-1] / 1000.0 if len(time_stamps) > 0 else current_frame
-                    print(f"DEBUG: Using time stamps for x-axis (converted from ms), current position: {current_x_pos}s")
+                        # Numeric timestamps - detect if milliseconds or seconds
+                        max_time = np.max(time_array) if len(time_array) > 0 else 0
+                        
+                        # Heuristic: if max time > 10000, assume milliseconds; otherwise seconds
+                        if max_time > 10000:
+                            # Data is in milliseconds, convert to seconds
+                            x_values = time_array / 1000.0
+                            print(f"DEBUG: Time stamps appear to be in milliseconds (max={max_time:.2f}), converting to seconds")
+                        else:
+                            # Data is already in seconds (or very short recording in ms)
+                            x_values = time_array
+                            print(f"DEBUG: Time stamps appear to be in seconds (max={max_time:.2f})")
+                    
+                    if x_values is not None:
+                        x_label = "Time (s)"
+                        
+                        # Convert current frame position to time
+                        if current_frame < len(x_values):
+                            current_x_pos = x_values[current_frame]
+                        else:
+                            current_x_pos = x_values[-1] if len(x_values) > 0 else current_frame
+                        
+                        print(f"DEBUG: Using time stamps for x-axis, current position: {current_x_pos}s")
                 else:
                     # Fallback: estimate time based on frame rate (if available)
                     frame_rate = getattr(ed, 'frame_rate', None) if ed else None
@@ -432,14 +510,38 @@ class TraceplotWidget(QWidget):
                 print(f"DEBUG: Found {len(stims)} stimulation timeframes: {stims}")
 
             # Convert stimulation timeframes to appropriate x-axis units
-            if show_time and x_values is not None:
-                # Convert stim frames to time positions (from ms to seconds)
-                for stim in stims:
-                    stim_frame = int(stim)
-                    if stim_frame < len(time_stamps):
-                        stim_x_pos = time_stamps[stim_frame] / 1000.0
-                        print(f"DEBUG: Adding stimulation vline at time {stim_x_pos:.2f}s (frame {stim_frame})")
-                        self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
+            if show_time and x_values is not None and time_stamps is not None:
+                # Handle both datetime strings and numeric timestamps
+                if isinstance(time_stamps[0], str):
+                    # Parse datetime strings for stimulation times
+                    from datetime import datetime
+                    try:
+                        first_dt = datetime.strptime(time_stamps[0], '%Y-%m-%d %H:%M:%S.%f')
+                        for stim in stims:
+                            stim_frame = int(stim)
+                            if stim_frame < len(time_stamps):
+                                stim_dt = datetime.strptime(time_stamps[stim_frame], '%Y-%m-%d %H:%M:%S.%f')
+                                stim_x_pos = (stim_dt - first_dt).total_seconds()
+                                print(f"DEBUG: Adding stimulation vline at time {stim_x_pos:.2f}s (frame {stim_frame})")
+                                self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
+                    except Exception as e:
+                        print(f"DEBUG: Error parsing datetime for stimulation: {e}")
+                else:
+                    # Numeric timestamps - detect format
+                    time_array = np.array(time_stamps)
+                    max_time = np.max(time_array) if len(time_array) > 0 else 0
+                    is_milliseconds = max_time > 10000
+                    
+                    # Convert stim frames to time positions
+                    for stim in stims:
+                        stim_frame = int(stim)
+                        if stim_frame < len(time_stamps):
+                            if is_milliseconds:
+                                stim_x_pos = time_stamps[stim_frame] / 1000.0
+                            else:
+                                stim_x_pos = time_stamps[stim_frame]
+                            print(f"DEBUG: Adding stimulation vline at time {stim_x_pos:.2f}s (frame {stim_frame})")
+                            self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
             else:
                 # Use frame numbers
                 for stim in stims:
@@ -538,8 +640,27 @@ class TraceplotWidget(QWidget):
                                 time_stamps = getattr(ed, attr_name)
                                 break
                 
-                if time_stamps is not None and current_frame < len(time_stamps):
-                    current_x_pos = time_stamps[current_frame] / 1000.0
+                if time_stamps is not None and len(time_stamps) > 0 and current_frame < len(time_stamps):
+                    # Handle both datetime strings and numeric timestamps
+                    if isinstance(time_stamps[0], str):
+                        # Parse datetime strings
+                        from datetime import datetime
+                        try:
+                            first_dt = datetime.strptime(time_stamps[0], '%Y-%m-%d %H:%M:%S.%f')
+                            current_dt = datetime.strptime(time_stamps[current_frame], '%Y-%m-%d %H:%M:%S.%f')
+                            current_x_pos = (current_dt - first_dt).total_seconds()
+                        except Exception:
+                            # Fall back to frame rate if parsing fails
+                            pass
+                    else:
+                        # Numeric timestamps - detect if milliseconds or seconds
+                        max_time = np.max(time_stamps) if len(time_stamps) > 0 else 0
+                        if max_time > 10000:
+                            # Data is in milliseconds, convert to seconds
+                            current_x_pos = time_stamps[current_frame] / 1000.0
+                        else:
+                            # Data is already in seconds
+                            current_x_pos = time_stamps[current_frame]
                 elif ed is not None:
                     # Fallback: estimate time based on frame rate
                     if isinstance(ed, dict):
@@ -575,7 +696,28 @@ class TraceplotWidget(QWidget):
                                     break
                         
                         if time_stamps is not None and len(time_stamps) > 0:
-                            xmax = max(np.array(time_stamps[:min(nframes, len(time_stamps))]) / 1000.0)
+                            # Handle both datetime strings and numeric timestamps
+                            if isinstance(time_stamps[0], str):
+                                # Parse datetime strings
+                                from datetime import datetime
+                                try:
+                                    first_dt = datetime.strptime(time_stamps[0], '%Y-%m-%d %H:%M:%S.%f')
+                                    last_idx = min(nframes, len(time_stamps)) - 1
+                                    last_dt = datetime.strptime(time_stamps[last_idx], '%Y-%m-%d %H:%M:%S.%f')
+                                    xmax = (last_dt - first_dt).total_seconds()
+                                except Exception:
+                                    xmax = max(1, nframes - 1)
+                            else:
+                                # Numeric timestamps - detect if milliseconds or seconds
+                                time_array = np.array(time_stamps[:min(nframes, len(time_stamps))])
+                                max_time = np.max(time_array) if len(time_array) > 0 else 0
+                                
+                                if max_time > 10000:
+                                    # Data is in milliseconds, convert to seconds
+                                    xmax = max(time_array / 1000.0)
+                                else:
+                                    # Data is already in seconds
+                                    xmax = max(time_array)
                         elif ed is not None:
                             frame_rate = getattr(ed, 'frame_rate', None)
                             if frame_rate and frame_rate > 0:

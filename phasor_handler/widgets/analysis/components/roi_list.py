@@ -74,20 +74,15 @@ class RoiListWidget(QWidget):
         roi_grid_layout.addWidget(self.save_roi_btn, 1, 0)
         roi_grid_layout.addWidget(self.load_roi_btn, 1, 1)
         roi_grid_layout.addWidget(self.export_trace_btn, 2, 0, 1, 2)
+
+        from PyQt6.QtWidgets import QCheckBox
+        self.hide_rois_checkbox = QCheckBox("Hide ROIs")
+        self.hide_rois_checkbox.stateChanged.connect(self._on_hide_rois_toggled)
+        roi_grid_layout.addWidget(self.hide_rois_checkbox, 3, 0)
         
-        # Create checkboxes for ROI display options
-        try:
-            from PyQt6.QtWidgets import QCheckBox
-            self.hide_rois_checkbox = QCheckBox("Hide ROIs")
-            self.hide_rois_checkbox.stateChanged.connect(self._on_hide_rois_toggled)
-            roi_grid_layout.addWidget(self.hide_rois_checkbox, 3, 0, 1, 2)
-            
-            self.display_labels_checkbox = QCheckBox("Hide Labels")
-            self.display_labels_checkbox.stateChanged.connect(self._on_hide_labels_toggled)
-            roi_grid_layout.addWidget(self.display_labels_checkbox, 3, 1, 1, 2)
-        except Exception:
-            self.hide_rois_checkbox = None
-            self.display_labels_checkbox = None
+        self.display_labels_checkbox = QCheckBox("Hide Labels")
+        self.display_labels_checkbox.stateChanged.connect(self._on_hide_labels_toggled)
+        roi_grid_layout.addWidget(self.display_labels_checkbox, 3, 1)
         
         roi_vbox.addLayout(roi_grid_layout)
         roi_group.setLayout(roi_vbox)
