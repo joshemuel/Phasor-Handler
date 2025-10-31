@@ -1,3 +1,5 @@
+# TODO Implement behavioural and sync information to metadata.
+
 """
 Metadata Information Viewer Component
 
@@ -104,7 +106,7 @@ class MetadataViewer(QDialog):
         self.timing_group.setLayout(self.timing_layout)
         layout.addWidget(self.timing_group)
         
-        # Stimulation Information Group
+        # Stimulation/Behavioral Information Group (will be renamed based on device)
         self.stim_group = QGroupBox("Stimulation Information")
         self.stim_layout = QGridLayout()
         self.stim_group.setLayout(self.stim_layout)
@@ -216,6 +218,16 @@ class MetadataViewer(QDialog):
             
     def update_overview_from_dict(self):
         """Update overview from dictionary metadata."""
+        # Determine device type
+        device_name = self.metadata.get('device_name', '').lower() if isinstance(self.metadata.get('device_name'), str) else ''
+        is_mini2p = 'mini' in device_name
+        
+        # Update group title based on device
+        if is_mini2p:
+            self.stim_group.setTitle("Behavioral Information")
+        else:
+            self.stim_group.setTitle("Stimulation Information")
+        
         # Experiment Summary
         row = 0
         for key in ['device_name', 'n_frames']:
@@ -270,37 +282,43 @@ class MetadataViewer(QDialog):
                                 display_value) if key != "Date (DDMMYYYY)" else self.add_info_row(self.timing_layout, row, key, display_value)
                 row += 1
         
-        # Stimulation Information
+        # Stimulation/Behavioral Information (device-specific)
         row = 0
-        stim_keys = ['stimulation_timeframes', 'stimulation_ms', 'duty_cycle', 'stimulated_roi_location', 'stimulated_rois']
-        for key in stim_keys:
-            if key in self.metadata:
-                value = self.metadata[key]
-                if isinstance(value, list):
-                    if key == 'stimulation_timeframes':
-                        display_value = ', '.join(map(str, value))
-                        key = "Stimulation Timeframes"
-                    elif key == 'stimulation_ms':
-                        display_value = ', '.join(map(str, [int(v/1000) for v in value]))
-                        key = "Stimulation Time (s)"
-                    elif key == 'duty_cycle':
-                        duty_cycle_counts = {val: value.count(val) for val in set(value)}
-                        display_value = ' | '.join([f'{val}: {count}X' for val, count in duty_cycle_counts.items()])
-                        key = "Duty Cycle"
-                    elif key == 'stimulated_roi_location':
-                        display_value = ', '.join(map(str, [len(x) for x in value]))
-                        key = "Number of stimulated ROIs"
-                    elif key == 'stimulated_rois':
-                        if not value or all(not sublist for sublist in value):
-                            display_value = "NA"
-                        else:
-                            display_value = ', '.join([', '.join(map(str, x)) for x in value])
-                        key = "Stimulated ROIs"
-                else:
-                    display_value = str(value)
-                self.add_info_row(self.stim_layout, row, key.replace('_', ' '), 
-                                display_value)
-                row += 1
+        if is_mini2p:
+            # Mini2P: Show only camera frame rate for behavioral information
+            camera_framerate = self.metadata.get('camera_framerate', 'NA')
+            self.add_info_row(self.stim_layout, row, "Camera Frame Rate (Hz)", str(camera_framerate))
+        else:
+            # 3i: Show stimulation information
+            stim_keys = ['stimulation_timeframes', 'stimulation_ms', 'duty_cycle', 'stimulated_roi_location', 'stimulated_rois']
+            for key in stim_keys:
+                if key in self.metadata:
+                    value = self.metadata[key]
+                    if isinstance(value, list):
+                        if key == 'stimulation_timeframes':
+                            display_value = ', '.join(map(str, value))
+                            key = "Stimulation Timeframes"
+                        elif key == 'stimulation_ms':
+                            display_value = ', '.join(map(str, [int(v/1000) for v in value]))
+                            key = "Stimulation Time (s)"
+                        elif key == 'duty_cycle':
+                            duty_cycle_counts = {val: value.count(val) for val in set(value)}
+                            display_value = ' | '.join([f'{val}: {count}X' for val, count in duty_cycle_counts.items()])
+                            key = "Duty Cycle"
+                        elif key == 'stimulated_roi_location':
+                            display_value = ', '.join(map(str, [len(x) for x in value]))
+                            key = "Number of stimulated ROIs"
+                        elif key == 'stimulated_rois':
+                            if not value or all(not sublist for sublist in value):
+                                display_value = "NA"
+                            else:
+                                display_value = ', '.join([', '.join(map(str, x)) for x in value])
+                            key = "Stimulated ROIs"
+                    else:
+                        display_value = str(value)
+                    self.add_info_row(self.stim_layout, row, key.replace('_', ' '), 
+                                    display_value)
+                    row += 1
         
         # Image Information
         row = 0

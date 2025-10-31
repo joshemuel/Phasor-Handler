@@ -817,9 +817,10 @@ class ImageViewWidget(QWidget):
             if isinstance(metadata, dict):
                 # Check direct key
                 if 'pixel_size' in metadata:
-                    return float(metadata['pixel_size'])
+                    pixel_size_str = str(metadata['pixel_size'])
+                    return self._parse_pixel_size_string(pixel_size_str)
                 
-                # Check nested structure from ImageRecord.yaml
+                # Check nested structure from ImageRecord.yaml (3i format)
                 if ('ImageRecord.yaml' in metadata and 
                     'CLensDef70' in metadata['ImageRecord.yaml'] and
                     'mMicronPerPixel' in metadata['ImageRecord.yaml']['CLensDef70']):
@@ -827,7 +828,8 @@ class ImageViewWidget(QWidget):
                     
             # Try as object with attributes
             elif hasattr(metadata, 'pixel_size'):
-                return float(metadata.pixel_size)
+                pixel_size_str = str(metadata.pixel_size)
+                return self._parse_pixel_size_string(pixel_size_str)
             elif hasattr(metadata, 'mMicronPerPixel'):
                 return float(metadata.mMicronPerPixel)
                 
@@ -835,3 +837,35 @@ class ImageViewWidget(QWidget):
             print(f"DEBUG: Could not extract pixel size from metadata: {e}")
         
         return None
+    
+    def _parse_pixel_size_string(self, pixel_size_str):
+        """
+        Parse pixel size string to extract numeric value in microns.
+        Handles formats like:
+        - '0.201μm/pixel'
+        - '0.201'
+        - 0.201
+        
+        Args:
+            pixel_size_str: String or number containing pixel size
+            
+        Returns:
+            float: Pixel size in microns per pixel
+        """
+        import re
+        
+        # If already a number, return it
+        if isinstance(pixel_size_str, (int, float)):
+            return float(pixel_size_str)
+        
+        # Convert to string and extract numeric part
+        pixel_size_str = str(pixel_size_str)
+        
+        # Try to extract the first number from the string
+        # Handles formats like "0.201μm/pixel" or "0.598μm/pixel"
+        match = re.search(r'(\d+\.?\d*)', pixel_size_str)
+        if match:
+            return float(match.group(1))
+        
+        # If no match, try direct float conversion as last resort
+        return float(pixel_size_str)
