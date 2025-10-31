@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "phasor-handler"
-version = "2.2.3"
+version = "2.2.4"
 authors = [{ name = "Josia Shemuel", email = "joshemuel@users.noreply.github.com" }]
 description = "A PyQt6 GUI toolbox for processing two-photon phasor imaging data"
 readme = "README.md"
