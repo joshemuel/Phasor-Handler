@@ -202,18 +202,7 @@ class RoiListWidget(QWidget):
             except Exception:
                 pass
         else:
-            # Create new ROI - calculate next available ROI number
-            existing_numbers = []
-            for roi in self.main_window._saved_rois:
-                roi_name = roi.get('name', '')
-                if roi_name.startswith('ROI '):
-                    try:
-                        number = int(roi_name.split('ROI ')[1])
-                        existing_numbers.append(number)
-                    except (IndexError, ValueError):
-                        pass
-            
-            next_num = max(existing_numbers) + 1 if existing_numbers else 1
+            next_num = len(self.main_window._saved_rois) + 1
             name = f"ROI {next_num}"
             
             color = (
