@@ -1,5 +1,3 @@
-# TODO read from .txt files of CHA and CHB channels if available
-
 #!/usr/bin/env python3
 """
 meta_reader.py
@@ -32,6 +30,42 @@ class DataFrameDict(dict):
         self[key] = value
 
 # ------------- FUNCTIONS -------------
+
+# Mini2P text file parser
+_SPLIT = re.compile(r"\s{4,}")  # split key/value on 4+ spaces
+
+def read_mini2p_meta(path):
+    """
+    Read Mini2P metadata from Information-CHA.txt or Information-CHB.txt files.
+    
+    Args:
+        path: Path to the text file
+        
+    Returns:
+        dict: Nested dictionary with sections as keys
+    """
+    from pathlib import Path
+    from typing import Dict, Any
+    
+    path = Path(path)
+    data: Dict[str, Dict[str, Any]] = {}
+    section = None
+    with path.open(encoding="utf-8-sig") as f:  # utf-8 with BOM safe; handles 'μ'
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith(("#", ";")):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip()
+                data.setdefault(section, {})
+                continue
+            if section is None: 
+                section = "_root_"
+                data.setdefault(section, {})
+            parts = _SPLIT.split(line, maxsplit=1) 
+            key, val = (parts[0].strip(), parts[1].strip()) if len(parts) == 2 else (parts[0], "")
+            data[section][key] = val
+    return data
 def open_overwrite(path, *args, **kwargs):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -358,7 +392,7 @@ def process_i3_folder(folder_path: str):
 
     # Output a json file 
     with open_overwrite(Path(folder_path) / 'experiment_summary.json', 'w', encoding='utf-8') as f:
-        json.dump(variables, f, indent=4)
+        json.dump(variables, f, indent=4, ensure_ascii=False)
 
     print(f"JSON file and Pickle file saved to {folder_path}")
 
@@ -399,12 +433,24 @@ def process_mini2p_folder(folder_path: str):
     # Collect all subdirectories and TDMS files
     folders = {}
     path_df = {}
+    txt_meta = {}  # Store parsed txt metadata
+    
     for subdir in os.listdir(folder_path):
         subdir_path = os.path.join(folder_path, subdir)
         if os.path.isdir(subdir_path):
             folders[subdir] = subdir_path
             tdms_files = [os.path.join(subdir_path, f) for f in os.listdir(subdir_path) if f.endswith('.tdms')]
             txt_files = [os.path.join(subdir_path, f) for f in os.listdir(subdir_path) if f.endswith('.txt')]
+
+            # Parse txt files for channel information
+            for txt_file in txt_files:
+                txt_filename = os.path.basename(txt_file)
+                if 'Information-CHA.txt' in txt_filename or 'Information-CHB.txt' in txt_filename:
+                    try:
+                        txt_meta[txt_filename] = read_mini2p_meta(txt_file)
+                        print(f"[INFO] Parsed metadata from {txt_filename}")
+                    except Exception as e:
+                        print(f"[WARN] Failed to parse {txt_filename}: {e}")
 
             if txt_files:
                 path_df[subdir] = (tdms_files, txt_files)
@@ -449,20 +495,41 @@ def process_mini2p_folder(folder_path: str):
         for _, row in info_df.iterrows():
             image_info[row['Item']] = row['Value']
     
-    # Parse timestamp from image info
+    # Override/supplement with txt file metadata if available
+    txt_cha = next((txt_meta[k] for k in txt_meta if 'CHA' in k), None)
+    txt_chb = next((txt_meta[k] for k in txt_meta if 'CHB' in k), None)
+    
+    # Use the first available txt metadata (prefer CHA)
+    primary_txt = txt_cha if txt_cha else txt_chb
+    
+    # Parse timestamp from txt file or image info
     import datetime
-    timestamp_str = safe_extract(lambda: image_info.get('Image time', 'NA'))
+    
+    timestamp_str = "NA"
+    if primary_txt and 'Basic Information' in primary_txt:
+        timestamp_str = safe_extract(lambda: primary_txt['Basic Information'].get('Time', 'NA'))
+    if timestamp_str == "NA":
+        timestamp_str = safe_extract(lambda: image_info.get('Image time', 'NA'))
+    
     if timestamp_str != 'NA':
         try:
-            # Parse format like "10/16/2025 11:19:54 PM"
-            dt = datetime.datetime.strptime(timestamp_str, "%m/%d/%Y %I:%M:%S %p")
+            # Try Mini2P format first: "2025-10-16_23-14-26.286"
+            if '_' in timestamp_str and '-' in timestamp_str:
+                # Format: YYYY-MM-DD_HH-MM-SS.mmm
+                timestamp_str = timestamp_str.split('.')[0]  # Remove milliseconds
+                dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%d_%H-%M-%S")
+            else:
+                # Try format like "10/16/2025 11:19:54 PM"
+                dt = datetime.datetime.strptime(timestamp_str, "%m/%d/%Y %I:%M:%S %p")
+            
             day = dt.day
             month = dt.month
             year = dt.year
             hour = dt.hour
             minute = dt.minute
             second = dt.second
-        except:
+        except Exception as e:
+            print(f"[WARN] Could not parse timestamp '{timestamp_str}': {e}")
             day = month = year = hour = minute = second = "NA"
     else:
         day = month = year = hour = minute = second = "NA"
@@ -519,7 +586,7 @@ def process_mini2p_folder(folder_path: str):
         "pixel_size": safe_extract(lambda: image_info.get('Image size_Pixel', 'NA')),
         "height": safe_extract(lambda: int(image_info.get('Image size_Line', 'NA'))),
         "width": safe_extract(lambda: int(image_info.get('Image size_Pixel', 'NA'))),
-        "FOV_size": "NA",  # Mini2P doesn't provide micron measurements in TDMS
+        "FOV_size": "NA",  # Will be updated from txt if available
         "zoom": safe_extract(lambda: image_info.get('Zoom', 'NA')),
         "laser_voltage": safe_extract(lambda: image_info.get('Laser(V)', 'NA')),
         "pmt_voltage": safe_extract(lambda: image_info.get('PMT(V)', 'NA')),
@@ -553,12 +620,93 @@ def process_mini2p_folder(folder_path: str):
         "data_folders": list(tdms_data.keys())
     }
     
+    # Enhance with txt file metadata if available
+    if primary_txt:
+        # Basic Information
+        if 'Basic Information' in primary_txt:
+            basic = primary_txt['Basic Information']
+            variables["system_config"] = safe_extract(lambda: basic.get('SystemConfig', 'NA'))
+            variables["probe"] = safe_extract(lambda: basic.get('Probe', 'NA'))
+            variables["imaging_mode"] = safe_extract(lambda: basic.get('ImagingMode', 'NA'))
+            variables["supergin_version"] = safe_extract(lambda: basic.get('SUPERGIN_Version', 'NA'))
+            variables["probe_type"] = safe_extract(lambda: basic.get('Probe_Type', 'NA'))
+            variables["pmt_gain"] = safe_extract(lambda: basic.get('PMT_Gain', 'NA'))
+        
+        # Power Regulation
+        if 'PowerRegulation' in primary_txt:
+            power = primary_txt['PowerRegulation']
+            variables["power_regulation_mode"] = safe_extract(lambda: power.get('PowerRegulationMode', 'NA'))
+            variables["power_voltage"] = safe_extract(lambda: power.get('Power', 'NA'))
+            variables["power_percentage"] = safe_extract(lambda: power.get('PowerPercentage', 'NA'))
+        
+        # Scan Information
+        if 'Scan' in primary_txt:
+            scan = primary_txt['Scan']
+            variables["scan_direction"] = safe_extract(lambda: scan.get('Scan_Direction', 'NA'))
+            variables["pixel_dwell"] = safe_extract(lambda: scan.get('Pixel_Dwell', 'NA'))
+            variables["frame_rate"] = safe_extract(lambda: scan.get('Frame_Rate', 'NA'))
+            variables["scan_frequency"] = safe_extract(lambda: scan.get('Frequency', 'NA'))
+            variables["fps_division"] = safe_extract(lambda: scan.get('FPS_Division', 'NA'))
+            
+            # Update dimensions from txt if available
+            pixel_x = safe_extract(lambda: int(scan.get('Pixel_X', 'NA')))
+            pixel_y = safe_extract(lambda: int(scan.get('Pixel_Y', 'NA')))
+            if pixel_x != "NA":
+                variables["width"] = pixel_x
+            if pixel_y != "NA":
+                variables["height"] = pixel_y
+        
+        # Zoom Information
+        if 'Zoom' in primary_txt:
+            zoom_info = primary_txt['Zoom']
+            variables["zoom"] = safe_extract(lambda: zoom_info.get('Zoom', 'NA'))
+            variables["amplitude_x"] = safe_extract(lambda: zoom_info.get('Amplitude_X', 'NA'))
+            variables["amplitude_y"] = safe_extract(lambda: zoom_info.get('Amplitude_Y', 'NA'))
+            variables["pixel_size"] = safe_extract(lambda: zoom_info.get('Pixel_Size', 'NA'))
+            variables["fov_x"] = safe_extract(lambda: zoom_info.get('Fov_X', 'NA'))
+            variables["fov_y"] = safe_extract(lambda: zoom_info.get('Fov_Y', 'NA'))
+            variables["FOV_size"] = safe_extract(lambda: f"{zoom_info.get('Fov_X', 'NA')} x {zoom_info.get('Fov_Y', 'NA')}")
+            variables["save_frames"] = safe_extract(lambda: zoom_info.get('Save Frames', 'NA'))
+        
+        # Stage Position
+        if 'Stage' in primary_txt:
+            stage = primary_txt['Stage']
+            variables["X_start_position"] = safe_extract(lambda: stage.get('Displacement_X', 'NA'))
+            variables["Y_start_position"] = safe_extract(lambda: stage.get('Displacement_Y', 'NA'))
+            variables["Z_start_position"] = safe_extract(lambda: stage.get('Displacement_Z', 'NA'))
+        
+        # ETL Information
+        if 'ETL' in primary_txt:
+            etl = primary_txt['ETL']
+            variables["etl_voltage"] = safe_extract(lambda: etl.get('Voltage', 'NA'))
+            variables["etl_distance"] = safe_extract(lambda: etl.get('Distance', 'NA'))
+        
+        # Behavioral Setting
+        if 'Behavioral Setting' in primary_txt:
+            behavioral = primary_txt['Behavioral Setting']
+            variables["camera_framerate"] = safe_extract(lambda: behavioral.get('Camera FrameRate', 'NA'))
+        
+        # Time Division Mode
+        if 'TimeDivisionMode' in primary_txt:
+            tdm = primary_txt['TimeDivisionMode']
+            variables["time_division_power"] = safe_extract(lambda: tdm.get('TimeDivisionModePower', 'NA'))
+            variables["channel_framerate"] = safe_extract(lambda: tdm.get('Channel FrameRate', 'NA'))
+    
+    # Add channel-specific metadata if both channels are available
+    if txt_cha and txt_chb:
+        variables["cha_metadata"] = txt_cha
+        variables["chb_metadata"] = txt_chb
+    elif txt_cha:
+        variables["cha_metadata"] = txt_cha
+    elif txt_chb:
+        variables["chb_metadata"] = txt_chb
+    
     # Save metadata
     with open(Path(folder_path) / 'experiment_summary.pkl', 'wb') as f:
         pickle.dump(variables, f)
     
     with open_overwrite(Path(folder_path) / 'experiment_summary.json', 'w', encoding='utf-8') as f:
-        json.dump(variables, f, indent=4)
+        json.dump(variables, f, indent=4, ensure_ascii=False)
     
     print(f"[OK] Mini2P metadata saved to {folder_path}")
     print("\n[OK] Files saved successfully.")

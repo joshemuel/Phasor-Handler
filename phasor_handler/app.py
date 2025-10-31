@@ -244,7 +244,7 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     try:
-        qdarktheme.setup_theme("auto")  # or your own apply_dark_theme()
+        qdarktheme.setup_theme()  # or your own apply_dark_theme()
     except Exception:
         pass  # fall back to default if theme package missing
     window = MainWindow()
