@@ -13,7 +13,7 @@ from PyQt6.QtGui import QFileSystemModel, QIcon
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
 
-from .widgets import ConversionWidget, RegistrationWidget, AnalysisWidget
+from .widgets import ConversionWidget, RegistrationWidget, AnalysisWidget, SecondLevelWidget
 from .workers import RegistrationWorker, ConversionWorker
 from .models.dir_manager import DirManager
 from .themes import apply_dark_theme
@@ -37,7 +37,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(ConversionWidget(self), "Conversion")
         self.tabs.addTab(RegistrationWidget(self), "Registration")
         # AnalysisWidget exposes compatible attributes on the main window
-        self.tabs.addTab(AnalysisWidget(self), "Analysis")
+        self.tabs.addTab(AnalysisWidget(self), "First Level")
+        self.tabs.addTab(SecondLevelWidget(self), "Second Level")
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.setCentralWidget(self.tabs)
 
@@ -130,9 +131,9 @@ class MainWindow(QMainWindow):
                 self.analysis_list_widget.addItem(item)
 
     def on_tab_changed(self, idx):
-        # When switching to analysis tab, refresh its directory list
+        # When switching to first level tab, refresh its directory list
         tab_text = self.tabs.tabText(idx)
-        if tab_text == "Analysis":
+        if tab_text == "First Level":
             if hasattr(self, 'analysis_list_widget'):
                 self.analysis_list_widget.clear()
                 from PyQt6.QtWidgets import QListWidgetItem
@@ -141,6 +142,10 @@ class MainWindow(QMainWindow):
                     item.setToolTip(full_path)
                     item.setData(Qt.ItemDataRole.UserRole, full_path)
                     self.analysis_list_widget.addItem(item)
+        elif tab_text == "Second Level":
+            # Trigger refresh of second level plots when tab is shown
+            if hasattr(self, 'second_level_widget'):
+                self.second_level_widget.refresh_plots()
 
     def run_conversion_script(self):
         if not self.selected_dirs:
