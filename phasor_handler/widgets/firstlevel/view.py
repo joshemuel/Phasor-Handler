@@ -1318,9 +1318,45 @@ class AnalysisWidget(QWidget):
         return stim_rois
     
     def _process_roi_data(self, roi_data, roi_dict, event_idx=None):
-        """Process individual ROI data entry and add to roi_dict for deduplication."""
+        """Process individual ROI data entry and add to roi_dict for deduplication.
+        
+        Expected roi_data format:
+        - For graphic_type 8 (rectangle) or 4 (ellipse): (roi_id, graphic_type, start_pos, end_pos, None)
+        - For graphic_type 3 (polygon): (roi_id, graphic_type, None, None, points_list)
+        """
         try:
-            if len(roi_data) >= 3:
+            if len(roi_data) >= 5:
+                roi_id = roi_data[0]
+                graphic_type = roi_data[1] if len(roi_data) > 1 else 8  # Default to rectangle
+                start_pos = roi_data[2]
+                end_pos = roi_data[3]
+                points = roi_data[4]
+                
+                # Use roi_id as key for deduplication (same ID = same ROI)
+                # If roi_id already exists, keep the first occurrence
+                if roi_id not in roi_dict:
+                    if graphic_type == 3 and points is not None and len(points) >= 3:
+                        # Polygon/Freehand - store points as list of (x, y) tuples (ignore z)
+                        roi_dict[roi_id] = {
+                            'id': roi_id,
+                            'graphic_type': graphic_type,
+                            'points': [(int(p[0]), int(p[1])) for p in points],
+                            'name': f'S{roi_id}'
+                        }
+                    elif graphic_type in [4, 8] and start_pos is not None and end_pos is not None:
+                        # Ellipse (4) or Rectangle (8) - store as xyxy
+                        x0, y0 = int(start_pos[0]), int(start_pos[1])
+                        x1, y1 = int(end_pos[0]), int(end_pos[1])
+                        roi_dict[roi_id] = {
+                            'id': roi_id,
+                            'graphic_type': graphic_type,
+                            'xyxy': (x0, y0, x1, y1),
+                            'name': f'S{roi_id}'
+                        }
+                    else:
+                        print(f"DEBUG: Unknown or incomplete ROI data for graphic_type {graphic_type}")
+            elif len(roi_data) >= 3:
+                # Legacy format without graphic_type: (roi_id, start_pos, end_pos)
                 roi_id = roi_data[0]
                 start_pos = roi_data[1]
                 end_pos = roi_data[2]
@@ -1329,17 +1365,12 @@ class AnalysisWidget(QWidget):
                 x0, y0 = int(start_pos[0]), int(start_pos[1])
                 x1, y1 = int(end_pos[0]), int(end_pos[1])
                 
-                # Create unique name with event info if available
-                if event_idx is not None:
-                    name = f'S{roi_id}E{event_idx}'
-                else:
-                    name = f'S{roi_id}'
-                
                 # Use roi_id as key for deduplication (same ID = same ROI)
                 # If roi_id already exists, keep the first occurrence
                 if roi_id not in roi_dict:
                     roi_dict[roi_id] = {
                         'id': roi_id,
+                        'graphic_type': 8,  # Default to rectangle for legacy data
                         'xyxy': (x0, y0, x1, y1),
                         'name': f'S{roi_id}'  # Simplified name for display
                     }
