@@ -219,155 +219,215 @@ class MetadataViewer(QDialog):
             
     def update_overview_from_dict(self):
         """Update overview from dictionary metadata."""
-        # Determine device type
-        device_name = self.metadata.get('device_name', '').lower() if isinstance(self.metadata.get('device_name'), str) else ''
-        is_mini2p = 'mini' in device_name
+        try:
+            # Safely determine device type
+            device_name = self.metadata.get('device_name', '').lower() if isinstance(self.metadata.get('device_name'), str) else ''
+            is_mini2p = 'mini' in device_name
+        except Exception:
+            device_name = ''
+            is_mini2p = False
         
         # Update group title based on device
-        if is_mini2p:
-            self.stim_group.setTitle("Behavioral Information")
-        else:
-            self.stim_group.setTitle("Stimulation Information")
+        try:
+            if is_mini2p:
+                self.stim_group.setTitle("Behavioral Information")
+            else:
+                self.stim_group.setTitle("Stimulation Information")
+        except Exception as e:
+            print(f"Error setting group title: {e}")
         
         # Experiment Summary
         row = 0
         for key in ['device_name', 'n_frames']:
-            if key in self.metadata:
-                value = self.metadata[key]
-                if key == "device_name": key = "Device Name"
-                elif key == "n_frames": key = "Number of Frames"
+            try:
+                if key in self.metadata:
+                    value = self.metadata[key]
+                    if key == "device_name": 
+                        key_display = "Device Name"
+                    elif key == "n_frames": 
+                        key_display = "Number of Frames"
+                    else:
+                        key_display = key.replace('_', ' ')
 
-                self.add_info_row(self.exp_summary_layout, row, key.replace('_', ' '), 
-                                str(value), self.format_value_with_unit(key, value))
+                    self.add_info_row(self.exp_summary_layout, row, key_display, 
+                                    str(value), self.format_value_with_unit(key, value))
+                    row += 1
+            except Exception as e:
+                print(f"Error loading {key}: {e}")
+                # Add blank entry instead of crashing
+                key_display = key.replace('_', ' ').title()
+                self.add_info_row(self.exp_summary_layout, row, key_display, "N/A")
                 row += 1
         
         # Timing Information
         row = 0
         time_keys = ['time_stamps', 'elapsed_times', 'acquisition_start_time', 'year', 'hour']
         for key in time_keys:
-            if key in self.metadata:
-                value = self.metadata[key]
-                if key == "year":
-                    year = self.metadata["year"]
-                    month = self.metadata["month"]
-                    day = self.metadata["day"]
-                    display_value = f"{day:02d}/{month:02d}/{year:04d}"
-                    key = "Date (DDMMYYYY)"
-                elif key == "hour":
-                    hour = self.metadata["hour"]
-                    minute = self.metadata["minute"]
-                    second = self.metadata["second"]
-                    display_value = f"{hour:02d}:{minute:02d}:{second:02d}"
-                    key = "Local Time"
-                elif isinstance(value, list) and len(value) > 0:
-                    try:
-                        # Try numeric calculation first (for millisecond timestamps)
-                        interval = (sum([value[i+1] - value[i] for i in range(len(value)-1)])/(len(value)-1))/1000
-                        start_display = "0" if value[0] == 0 else f"{value[0]/1000:.3f}"
-                        display_value = f"From {start_display} to {value[-1]/1000:.3f} seconds with an average interval of {interval:.3f} seconds"
-                    except TypeError:
-                        # Handle string timestamps (e.g., "2025-10-17 01:27:48.063")
-                        from datetime import datetime
+            try:
+                if key in self.metadata:
+                    value = self.metadata[key]
+                    key_display = key
+                    
+                    if key == "year":
+                        year = self.metadata.get("year", 0)
+                        month = self.metadata.get("month", 0)
+                        day = self.metadata.get("day", 0)
+                        display_value = f"{day:02d}/{month:02d}/{year:04d}"
+                        key_display = "Date (DDMMYYYY)"
+                    elif key == "hour":
+                        hour = self.metadata.get("hour", 0)
+                        minute = self.metadata.get("minute", 0)
+                        second = self.metadata.get("second", 0)
+                        display_value = f"{hour:02d}:{minute:02d}:{second:02d}"
+                        key_display = "Local Time"
+                    elif isinstance(value, list) and len(value) > 0:
                         try:
-                            timestamps = [datetime.fromisoformat(ts) for ts in value]
-                            intervals = [(timestamps[i+1] - timestamps[i]).total_seconds() for i in range(len(timestamps)-1)]
-                            interval = sum(intervals) / len(intervals)
-                            start_time = (timestamps[0] - timestamps[0]).total_seconds()  # Always 0
-                            end_time = (timestamps[-1] - timestamps[0]).total_seconds()
-                            display_value = f"From {start_time:.3f} to {end_time:.3f} seconds with an average interval of {interval:.3f} seconds"
-                        except (ValueError, AttributeError):
-                            display_value = f"List with {len(value)} items"
-                else:
-                    display_value = str(value)
-                self.add_info_row(self.timing_layout, row, key.replace('_', ' ').title(), 
-                                display_value) if key != "Date (DDMMYYYY)" else self.add_info_row(self.timing_layout, row, key, display_value)
+                            # Try numeric calculation first (for millisecond timestamps)
+                            interval = (sum([value[i+1] - value[i] for i in range(len(value)-1)])/(len(value)-1))/1000
+                            start_display = "0" if value[0] == 0 else f"{value[0]/1000:.3f}"
+                            display_value = f"From {start_display} to {value[-1]/1000:.3f} seconds with an average interval of {interval:.3f} seconds"
+                        except (TypeError, ZeroDivisionError):
+                            # Handle string timestamps (e.g., "2025-10-17 01:27:48.063")
+                            try:
+                                from datetime import datetime
+                                timestamps = [datetime.fromisoformat(ts) for ts in value]
+                                intervals = [(timestamps[i+1] - timestamps[i]).total_seconds() for i in range(len(timestamps)-1)]
+                                interval = sum(intervals) / len(intervals) if intervals else 0
+                                start_time = (timestamps[0] - timestamps[0]).total_seconds()  # Always 0
+                                end_time = (timestamps[-1] - timestamps[0]).total_seconds()
+                                display_value = f"From {start_time:.3f} to {end_time:.3f} seconds with an average interval of {interval:.3f} seconds"
+                            except (ValueError, AttributeError, ZeroDivisionError):
+                                display_value = f"List with {len(value)} items"
+                    else:
+                        display_value = str(value)
+                    
+                    if key_display != "Date (DDMMYYYY)":
+                        self.add_info_row(self.timing_layout, row, key_display.replace('_', ' ').title(), display_value)
+                    else:
+                        self.add_info_row(self.timing_layout, row, key_display, display_value)
+                    row += 1
+            except Exception as e:
+                print(f"Error loading timing info for {key}: {e}")
+                key_display = key.replace('_', ' ').title()
+                self.add_info_row(self.timing_layout, row, key_display, "N/A")
                 row += 1
         
         # Stimulation/Behavioral Information (device-specific)
         row = 0
-        if is_mini2p:
-            # Mini2P: Show only camera frame rate for behavioral information
-            camera_framerate = self.metadata.get('camera_framerate', 'NA')
-            self.add_info_row(self.stim_layout, row, "Camera Frame Rate (Hz)", str(camera_framerate))
-        else:
-            # 3i: Show stimulation information
-            stim_keys = ['stimulation_timeframes', 'stimulation_ms', 'duty_cycle', 'stimulated_roi_location', 'stimulated_rois']
-            for key in stim_keys:
-                if key in self.metadata:
-                    value = self.metadata[key]
-                    if isinstance(value, list):
-                        if key == 'stimulation_timeframes':
-                            display_value = ', '.join(map(str, value))
-                            key = "Stimulation Timeframes"
-                        elif key == 'stimulation_ms':
-                            display_value = ', '.join(map(str, [int(v/1000) for v in value]))
-                            key = "Stimulation Time (s)"
-                        elif key == 'duty_cycle':
-                            duty_cycle_counts = {val: value.count(val) for val in set(value)}
-                            display_value = ' | '.join([f'{val}: {count}X' for val, count in duty_cycle_counts.items()])
-                            key = "Duty Cycle"
-                        elif key == 'stimulated_roi_location':
-                            display_value = ', '.join(map(str, [len(x) for x in value]))
-                            key = "Number of stimulated ROIs"
-                        elif key == 'stimulated_rois':
-                            if not value or all(not sublist for sublist in value):
-                                display_value = "NA"
+        try:
+            if is_mini2p:
+                # Mini2P: Show only camera frame rate for behavioral information
+                try:
+                    camera_framerate = self.metadata.get('camera_framerate', 'N/A')
+                    self.add_info_row(self.stim_layout, row, "Camera Frame Rate (Hz)", str(camera_framerate))
+                except Exception as e:
+                    print(f"Error loading camera framerate: {e}")
+                    self.add_info_row(self.stim_layout, row, "Camera Frame Rate (Hz)", "N/A")
+            else:
+                # 3i: Show stimulation information
+                stim_keys = ['stimulation_timeframes', 'stimulation_ms', 'duty_cycle', 'stimulated_roi_location', 'stimulated_rois']
+                for key in stim_keys:
+                    try:
+                        if key in self.metadata:
+                            value = self.metadata[key]
+                            key_display = key
+                            
+                            if isinstance(value, list):
+                                if key == 'stimulation_timeframes':
+                                    display_value = ', '.join(map(str, value))
+                                    key_display = "Stimulation Timeframes"
+                                elif key == 'stimulation_ms':
+                                    display_value = ', '.join(map(str, [int(v/1000) for v in value]))
+                                    key_display = "Stimulation Time (s)"
+                                elif key == 'duty_cycle':
+                                    duty_cycle_counts = {val: value.count(val) for val in set(value)}
+                                    display_value = ' | '.join([f'{val}: {count}X' for val, count in duty_cycle_counts.items()])
+                                    key_display = "Duty Cycle"
+                                elif key == 'stimulated_roi_location':
+                                    display_value = ', '.join(map(str, [len(x) for x in value]))
+                                    key_display = "Number of stimulated ROIs"
+                                elif key == 'stimulated_rois':
+                                    if not value or all(not sublist for sublist in value):
+                                        display_value = "N/A"
+                                    else:
+                                        display_value = ', '.join([', '.join(map(str, x)) for x in value])
+                                    key_display = "Stimulated ROIs"
+                                else:
+                                    display_value = str(value)
                             else:
-                                display_value = ', '.join([', '.join(map(str, x)) for x in value])
-                            key = "Stimulated ROIs"
-                    else:
-                        display_value = str(value)
-                    self.add_info_row(self.stim_layout, row, key.replace('_', ' '), 
-                                    display_value)
-                    row += 1
+                                display_value = str(value)
+                            
+                            self.add_info_row(self.stim_layout, row, key_display.replace('_', ' '), display_value)
+                            row += 1
+                    except Exception as e:
+                        print(f"Error loading stimulation info for {key}: {e}")
+                        key_display = key.replace('_', ' ').title()
+                        self.add_info_row(self.stim_layout, row, key_display, "N/A")
+                        row += 1
+        except Exception as e:
+            print(f"Error loading stimulation/behavioral information: {e}")
         
         # Image Information
         row = 0
         image_keys = ['pixel_size', 'FOV_size']
         for key in image_keys:
-            if key in self.metadata:
-                value = self.metadata[key]
-                if key == "pixel_size": 
-                    key = "Pixel Size (µm)"
-                    value = re.sub(r'[^0-9.]+', '', str(value))
-                elif key == "FOV_size": 
-                    key = "FOV Size (µm)"
-                    # Parse FOV_size to format as "206 x 176" (without μm on individual values)
-                    # Example input: "206μm x 176μm"
-                    value = str(value).replace('μm', '').replace('um', '').replace('microns', '').strip()
+            try:
+                if key in self.metadata:
+                    value = self.metadata[key]
+                    key_display = key
+                    
+                    if key == "pixel_size": 
+                        key_display = "Pixel Size (µm)"
+                        value = re.sub(r'[^0-9.]+', '', str(value))
+                    elif key == "FOV_size": 
+                        key_display = "FOV Size (µm)"
+                        # Parse FOV_size to format as "206 x 176" (without μm on individual values)
+                        # Example input: "206μm x 176μm"
+                        value = str(value).replace('μm', '').replace('um', '').replace('microns', '').strip()
 
-                self.add_info_row(self.image_layout, row, key.replace('_', ' '), 
-                                str(value))
+                    self.add_info_row(self.image_layout, row, key_display.replace('_', ' '), str(value))
+                    row += 1
+            except Exception as e:
+                print(f"Error loading image info for {key}: {e}")
+                key_display = key.replace('_', ' ').title()
+                self.add_info_row(self.image_layout, row, key_display, "N/A")
                 row += 1
                 
     def update_overview_from_object(self):
         """Update overview from object metadata."""
-        # Get all non-private attributes
-        attrs = [attr for attr in dir(self.metadata) if not attr.startswith('_')]
-        
-        # Categorize attributes
-        exp_attrs = []
-        time_attrs = []
-        stim_attrs = []
-        image_attrs = []
-        
-        for attr in attrs:
-            if any(keyword in attr.lower() for keyword in ['frame', 'duration', 'rate']):
-                exp_attrs.append(attr)
-            elif any(keyword in attr.lower() for keyword in ['time', 'elapsed']):
-                time_attrs.append(attr)
-            elif any(keyword in attr.lower() for keyword in ['stim', 'duty']):
-                stim_attrs.append(attr)
-            elif any(keyword in attr.lower() for keyword in ['image', 'width', 'height', 'channel', 'bit']):
-                image_attrs.append(attr)
-            else:
-                exp_attrs.append(attr)  # Default to experiment summary
-        
-        # Populate each section
-        self.populate_section_from_attrs(self.exp_summary_layout, exp_attrs)
-        self.populate_section_from_attrs(self.timing_layout, time_attrs)
-        self.populate_section_from_attrs(self.stim_layout, stim_attrs)
-        self.populate_section_from_attrs(self.image_layout, image_attrs)
+        try:
+            # Get all non-private attributes
+            attrs = [attr for attr in dir(self.metadata) if not attr.startswith('_')]
+            
+            # Categorize attributes
+            exp_attrs = []
+            time_attrs = []
+            stim_attrs = []
+            image_attrs = []
+            
+            for attr in attrs:
+                try:
+                    if any(keyword in attr.lower() for keyword in ['frame', 'duration', 'rate']):
+                        exp_attrs.append(attr)
+                    elif any(keyword in attr.lower() for keyword in ['time', 'elapsed']):
+                        time_attrs.append(attr)
+                    elif any(keyword in attr.lower() for keyword in ['stim', 'duty']):
+                        stim_attrs.append(attr)
+                    elif any(keyword in attr.lower() for keyword in ['image', 'width', 'height', 'channel', 'bit']):
+                        image_attrs.append(attr)
+                    else:
+                        exp_attrs.append(attr)  # Default to experiment summary
+                except Exception as e:
+                    print(f"Error categorizing attribute {attr}: {e}")
+            
+            # Populate each section
+            self.populate_section_from_attrs(self.exp_summary_layout, exp_attrs)
+            self.populate_section_from_attrs(self.timing_layout, time_attrs)
+            self.populate_section_from_attrs(self.stim_layout, stim_attrs)
+            self.populate_section_from_attrs(self.image_layout, image_attrs)
+        except Exception as e:
+            print(f"Error updating overview from object: {e}")
+            self.add_info_row(self.exp_summary_layout, 0, "Error", f"Could not load metadata: {e}")
         
     def populate_section_from_attrs(self, layout, attrs):
         """Populate a section with attributes from the metadata object."""
@@ -414,29 +474,54 @@ class MetadataViewer(QDialog):
             
     def update_tree_tab(self):
         """Update the tree view tab."""
-        self.tree_widget.clear()
-        
-        if self.metadata is None:
-            return
+        try:
+            self.tree_widget.clear()
             
-        if isinstance(self.metadata, dict):
-            self.add_dict_to_tree(self.metadata, self.tree_widget.invisibleRootItem())
-        else:
-            self.add_object_to_tree(self.metadata, self.tree_widget.invisibleRootItem())
-            
-        # Expand first level
-        for i in range(self.tree_widget.topLevelItemCount()):
-            item = self.tree_widget.topLevelItem(i)
-            if item.childCount() < 20:  # Don't auto-expand large sections
-                item.setExpanded(True)
+            if self.metadata is None:
+                return
+                
+            if isinstance(self.metadata, dict):
+                self.add_dict_to_tree(self.metadata, self.tree_widget.invisibleRootItem())
+            else:
+                self.add_object_to_tree(self.metadata, self.tree_widget.invisibleRootItem())
+                
+            # Expand first level
+            for i in range(self.tree_widget.topLevelItemCount()):
+                try:
+                    item = self.tree_widget.topLevelItem(i)
+                    if item and item.childCount() < 20:  # Don't auto-expand large sections
+                        item.setExpanded(True)
+                except Exception as e:
+                    print(f"Error expanding tree item {i}: {e}")
+        except Exception as e:
+            print(f"Error updating tree tab: {e}")
+            # Add error message to tree
+            error_item = QTreeWidgetItem(self.tree_widget.invisibleRootItem())
+            error_item.setText(0, "Error")
+            error_item.setText(1, f"Could not load tree view: {e}")
+            error_item.setText(2, "Error")
                 
     def add_dict_to_tree(self, data, parent_item, max_depth=5, current_depth=0):
         """Recursively add dictionary data to tree widget."""
         if current_depth >= max_depth:
             return
-            
-        for key, value in data.items():
-            self.add_value_to_tree(key, value, parent_item, current_depth)
+        
+        try:
+            for key, value in data.items():
+                try:
+                    self.add_value_to_tree(key, value, parent_item, current_depth)
+                except Exception as e:
+                    print(f"Error adding {key} to tree: {e}")
+                    # Add error entry
+                    try:
+                        item = QTreeWidgetItem(parent_item)
+                        item.setText(0, str(key))
+                        item.setText(1, f"Error: {e}")
+                        item.setText(2, "Error")
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"Error iterating dictionary in tree: {e}")
             
     def add_object_to_tree(self, obj, parent_item, max_depth=5, current_depth=0):
         """Add object attributes to tree widget."""
@@ -454,32 +539,46 @@ class MetadataViewer(QDialog):
                 
     def add_value_to_tree(self, key, value, parent_item, current_depth):
         """Add a key-value pair to the tree."""
-        item = QTreeWidgetItem(parent_item)
-        item.setText(0, str(key))
-        
-        value_type = type(value).__name__
-        item.setText(2, value_type)
-        
-        if isinstance(value, (dict, list, tuple)) and len(value) > 0:
-            if isinstance(value, dict):
-                item.setText(1, f"Dictionary with {len(value)} items")
-                if current_depth < 4:  # Prevent infinite recursion
-                    self.add_dict_to_tree(value, item, current_depth=current_depth+1)
-            elif isinstance(value, (list, tuple)):
-                if len(value) <= 5:
-                    item.setText(1, str(value))
-                else:
-                    item.setText(1, f"{value_type} with {len(value)} items: {value[:3]}...")
-                    # Add first few items for lists
-                    if current_depth < 3:
-                        for i, list_val in enumerate(value[:10]):  # Limit to first 10 items
-                            self.add_value_to_tree(f"[{i}]", list_val, item, current_depth+1)
-        else:
-            # Truncate very long strings
-            str_value = str(value)
-            if len(str_value) > 200:
-                str_value = str_value[:200] + "..."
-            item.setText(1, str_value)
+        try:
+            item = QTreeWidgetItem(parent_item)
+            item.setText(0, str(key))
+            
+            value_type = type(value).__name__
+            item.setText(2, value_type)
+            
+            if isinstance(value, (dict, list, tuple)) and len(value) > 0:
+                if isinstance(value, dict):
+                    item.setText(1, f"Dictionary with {len(value)} items")
+                    if current_depth < 4:  # Prevent infinite recursion
+                        self.add_dict_to_tree(value, item, current_depth=current_depth+1)
+                elif isinstance(value, (list, tuple)):
+                    if len(value) <= 5:
+                        item.setText(1, str(value))
+                    else:
+                        item.setText(1, f"{value_type} with {len(value)} items: {value[:3]}...")
+                        # Add first few items for lists
+                        if current_depth < 3:
+                            for i, list_val in enumerate(value[:10]):  # Limit to first 10 items
+                                try:
+                                    self.add_value_to_tree(f"[{i}]", list_val, item, current_depth+1)
+                                except Exception as e:
+                                    print(f"Error adding list item {i}: {e}")
+            else:
+                # Truncate very long strings
+                str_value = str(value)
+                if len(str_value) > 200:
+                    str_value = str_value[:200] + "..."
+                item.setText(1, str_value)
+        except Exception as e:
+            print(f"Error adding value to tree for key {key}: {e}")
+            # Try to add at least the key with an error message
+            try:
+                item = QTreeWidgetItem(parent_item)
+                item.setText(0, str(key))
+                item.setText(1, f"Error: {e}")
+                item.setText(2, "Error")
+            except Exception:
+                pass
             
     def update_raw_tab(self):
         """Update the raw JSON tab."""

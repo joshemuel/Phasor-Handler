@@ -11,6 +11,7 @@ This component handles all ROI list management including:
 """
 
 import json
+import os
 import random
 import numpy as np
 from PyQt6.QtWidgets import (
@@ -362,11 +363,20 @@ class RoiListWidget(QWidget):
     
     def _on_load_roi_positions_clicked(self):
         """Load ROI positions from a JSON file."""
+        # Get the current directory path from the analysis widget
+        default_dir = None
+        if hasattr(self.main_window, '_get_current_directory_path'):
+            default_dir = self.main_window._get_current_directory_path()
+        
         # Open file dialog to choose file to import
         file_dialog = QFileDialog(self)
         file_dialog.setWindowTitle("Load ROI Positions")
         file_dialog.setNameFilter("JSON files (*.json)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        
+        # Set the default directory if available
+        if default_dir:
+            file_dialog.setDirectory(default_dir)
         
         if not file_dialog.exec():
             return
@@ -421,6 +431,20 @@ class RoiListWidget(QWidget):
         if not hasattr(self.main_window, '_saved_rois') or not self.main_window._saved_rois:
             QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
             return
+        
+        # Get the current directory path from the analysis widget
+        default_dir = None
+        if hasattr(self.main_window, '_get_current_directory_path'):
+            default_dir = self.main_window._get_current_directory_path()
+        
+        # Generate default filename
+        default_filename = "roi_positions.json"
+        
+        # Combine directory and filename for full default path
+        if default_dir:
+            default_path = os.path.join(default_dir, default_filename)
+        else:
+            default_path = default_filename
             
         # Open file dialog to choose save location
         file_dialog = QFileDialog(self)
@@ -428,6 +452,10 @@ class RoiListWidget(QWidget):
         file_dialog.setNameFilter("JSON files (*.json)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         file_dialog.setDefaultSuffix("json")
+        
+        # Set the default directory if available
+        if default_dir and default_path:
+            file_dialog.selectFile(default_path)
         
         if not file_dialog.exec():
             return
@@ -463,6 +491,20 @@ class RoiListWidget(QWidget):
         if not hasattr(self.main_window, '_current_tif') or self.main_window._current_tif is None:
             QMessageBox.warning(self, "No Image Data", "No image data loaded. Please load a dataset first.")
             return
+        
+        # Get the current directory path from the analysis widget
+        default_dir = None
+        if hasattr(self.main_window, '_get_current_directory_path'):
+            default_dir = self.main_window._get_current_directory_path()
+        
+        # Generate default filename
+        default_filename = "roi_traces.txt"
+        
+        # Combine directory and filename for full default path
+        if default_dir:
+            default_path = os.path.join(default_dir, default_filename)
+        else:
+            default_path = default_filename
             
         # Open file dialog to choose save location
         file_dialog = QFileDialog(self)
@@ -470,6 +512,10 @@ class RoiListWidget(QWidget):
         file_dialog.setNameFilter("Text files (*.txt)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         file_dialog.setDefaultSuffix("txt")
+        
+        # Set the default directory if available
+        if default_dir and default_path:
+            file_dialog.selectFile(default_path)
         
         if not file_dialog.exec():
             return
