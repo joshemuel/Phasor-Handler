@@ -11,6 +11,7 @@ This component handles all ROI list management including:
 """
 
 import json
+import os
 import random
 import numpy as np
 from PyQt6.QtWidgets import (
@@ -197,7 +198,20 @@ class RoiListWidget(QWidget):
             except Exception:
                 pass
         else:
-            next_num = len(self.main_window._saved_rois) + 1
+            # Find the first available ROI number starting from 1
+            import re
+            existing_numbers = set()
+            for existing_roi in self.main_window._saved_rois:
+                roi_name = existing_roi.get('name', '')
+                match = re.search(r'\d+', roi_name)
+                if match:
+                    existing_numbers.add(int(match.group()))
+            
+            # Find first available number starting from 1
+            next_num = 1
+            while next_num in existing_numbers:
+                next_num += 1
+            
             name = f"ROI {next_num}"
             
             color = (
@@ -362,11 +376,20 @@ class RoiListWidget(QWidget):
     
     def _on_load_roi_positions_clicked(self):
         """Load ROI positions from a JSON file."""
+        # Get the current directory path from the analysis widget
+        default_dir = None
+        if hasattr(self.main_window, '_get_current_directory_path'):
+            default_dir = self.main_window._get_current_directory_path()
+        
         # Open file dialog to choose file to import
         file_dialog = QFileDialog(self)
         file_dialog.setWindowTitle("Load ROI Positions")
         file_dialog.setNameFilter("JSON files (*.json)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        
+        # Set the default directory if available
+        if default_dir:
+            file_dialog.setDirectory(default_dir)
         
         if not file_dialog.exec():
             return
@@ -421,6 +444,20 @@ class RoiListWidget(QWidget):
         if not hasattr(self.main_window, '_saved_rois') or not self.main_window._saved_rois:
             QMessageBox.warning(self, "No ROIs", "No ROIs to save.")
             return
+        
+        # Get the current directory path from the analysis widget
+        default_dir = None
+        if hasattr(self.main_window, '_get_current_directory_path'):
+            default_dir = self.main_window._get_current_directory_path()
+        
+        # Generate default filename
+        default_filename = "roi_positions.json"
+        
+        # Combine directory and filename for full default path
+        if default_dir:
+            default_path = os.path.join(default_dir, default_filename)
+        else:
+            default_path = default_filename
             
         # Open file dialog to choose save location
         file_dialog = QFileDialog(self)
@@ -428,6 +465,10 @@ class RoiListWidget(QWidget):
         file_dialog.setNameFilter("JSON files (*.json)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         file_dialog.setDefaultSuffix("json")
+        
+        # Set the default directory if available
+        if default_dir and default_path:
+            file_dialog.selectFile(default_path)
         
         if not file_dialog.exec():
             return
@@ -463,6 +504,20 @@ class RoiListWidget(QWidget):
         if not hasattr(self.main_window, '_current_tif') or self.main_window._current_tif is None:
             QMessageBox.warning(self, "No Image Data", "No image data loaded. Please load a dataset first.")
             return
+        
+        # Get the current directory path from the analysis widget
+        default_dir = None
+        if hasattr(self.main_window, '_get_current_directory_path'):
+            default_dir = self.main_window._get_current_directory_path()
+        
+        # Generate default filename
+        default_filename = "roi_traces.txt"
+        
+        # Combine directory and filename for full default path
+        if default_dir:
+            default_path = os.path.join(default_dir, default_filename)
+        else:
+            default_path = default_filename
             
         # Open file dialog to choose save location
         file_dialog = QFileDialog(self)
@@ -470,6 +525,10 @@ class RoiListWidget(QWidget):
         file_dialog.setNameFilter("Text files (*.txt)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         file_dialog.setDefaultSuffix("txt")
+        
+        # Set the default directory if available
+        if default_dir and default_path:
+            file_dialog.selectFile(default_path)
         
         if not file_dialog.exec():
             return
@@ -506,10 +565,35 @@ class RoiListWidget(QWidget):
             else:
                 progress = None
             
-            # Prepare headers: Frame, Time, then for each ROI: Green_Mean_ROI#, Red_Mean_ROI#, Trace_ROI#
+            # Extract ROI numbers from names and handle duplicates
+            import re
             headers = ["Frame", "Time"]
+            roi_numbers = []
+            seen_numbers = {}
+            
             for i, roi in enumerate(self.main_window._saved_rois):
-                roi_num = i + 1
+                roi_name = roi.get('name', f'ROI {i + 1}')
+                
+                # Extract number from ROI name using regex
+                # Matches patterns like "ROI14", "S14", "ROI 14", etc.
+                match = re.search(r'\d+', roi_name)
+                if match:
+                    roi_num = int(match.group())
+                else:
+                    # Fallback to index if no number found
+                    roi_num = i + 1
+                
+                # Handle duplicates by incrementing until unique
+                original_num = roi_num
+                while roi_num in seen_numbers:
+                    roi_num += 1
+                
+                seen_numbers[roi_num] = True
+                roi_numbers.append(roi_num)
+                
+                if roi_num != original_num:
+                    print(f"Warning: Duplicate ROI number {original_num} detected, using {roi_num} instead")
+                
                 headers.extend([
                     f"Green_Mean_ROI{roi_num}",
                     f"Red_Mean_ROI{roi_num}",

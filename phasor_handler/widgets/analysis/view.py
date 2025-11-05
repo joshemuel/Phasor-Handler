@@ -333,6 +333,7 @@ class AnalysisWidget(QWidget):
             # Expose moved analysis methods for backward compatibility
             self.window.display_reg_tif_image = self.display_reg_tif_image
             self.window.update_tif_frame = self.update_tif_frame
+            self.window._get_current_directory_path = self._get_current_directory_path  # Expose helper method
         except Exception:
             pass
 
@@ -1461,15 +1462,15 @@ class AnalysisWidget(QWidget):
             # Generate default filename with timestamp and directory info
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             
-            # Get current directory name for filename
-            current_item = self.analysis_list_widget.currentItem()
+            # Get current directory path and name for filename
+            current_dir_path = self._get_current_directory_path()
             dir_name = "image"
-            if current_item:
-                full_path = current_item.data(Qt.ItemDataRole.UserRole)
-                if full_path:
-                    dir_name = os.path.basename(full_path)
-                else:
-                    dir_name = current_item.text()
+            default_dir = ""
+            
+            if current_dir_path:
+                dir_name = os.path.basename(current_dir_path)
+                # Use the current directory as the default directory
+                default_dir = current_dir_path
                 # Clean up directory name for filename
                 dir_name = "".join(c for c in dir_name if c.isalnum() or c in ('-', '_')).rstrip()
             
@@ -1479,11 +1480,17 @@ class AnalysisWidget(QWidget):
             # Generate default filename (without extension)
             default_filename = f"{dir_name}_frame{frame_idx:04d}_{timestamp}"
             
+            # Combine directory and filename for full default path
+            if default_dir:
+                default_path = os.path.join(default_dir, default_filename)
+            else:
+                default_path = default_filename
+            
             # Open save file dialog with format selection
             file_path, selected_filter = QFileDialog.getSaveFileName(
                 self,
                 "Save Current View",
-                default_filename,
+                default_path,
                 "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)"
             )
             
@@ -1612,6 +1619,9 @@ class AnalysisWidget(QWidget):
         elif event.key() == Qt.Key.Key_H:
             self._toggle_text_visibility()
             event.accept()
+        elif event.key() == Qt.Key.Key_L and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self._clear_all_rois()
+            event.accept()
         else:
             super().keyPressEvent(event)
 
@@ -1645,6 +1655,65 @@ class AnalysisWidget(QWidget):
         
         # Clear the trace plot using the trace plot widget
         self.trace_plot_widget.clear_trace()
+
+    def _clear_all_rois(self):
+        """Clear all saved ROIs from the ROI list (triggered by CTRL+L)."""
+        # Check if there are any ROIs to clear
+        if not hasattr(self.window, '_saved_rois') or not self.window._saved_rois:
+            print("DEBUG: No ROIs to clear")
+            return
+        
+        # Ask for confirmation
+        reply = QMessageBox.question(
+            self,
+            "Clear All ROIs",
+            f"Are you sure you want to clear all {len(self.window._saved_rois)} ROIs?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Clear the ROI list widget
+            self.roi_list_widget.clear()
+            
+            # Clear the saved ROIs
+            self.window._saved_rois = []
+            
+            # Clear editing state
+            self._editing_roi_index = None
+            if hasattr(self, 'roi_list_component'):
+                self.roi_list_component.clear_editing_state()
+            
+            # Update the ROI tool
+            if hasattr(self, 'roi_tool') and self.roi_tool is not None:
+                self.roi_tool.set_saved_rois([])
+                if hasattr(self.roi_tool, 'clear_selection'):
+                    self.roi_tool.clear_selection()
+                else:
+                    self.roi_tool.clear()
+                self.roi_tool._paint_overlay()
+            
+            # Clear the current selection and trace
+            self._clear_roi_and_trace()
+            
+            print("DEBUG: All ROIs cleared")
+
+    def _get_current_directory_path(self):
+        """Get the full path of the currently selected directory in the analysis list.
+        
+        Returns:
+            str or None: The full path to the current directory, or None if no directory is selected.
+        """
+        current_item = self.analysis_list_widget.currentItem()
+        if not current_item:
+            return None
+        
+        # Get the full path from UserRole, fallback to text for compatibility
+        reg_dir = current_item.data(Qt.ItemDataRole.UserRole)
+        if reg_dir is None:
+            reg_dir = current_item.text()
+        
+        return reg_dir
 
     def _load_stimulated_rois(self):
         """Load stimulated ROIs from the current folder and add them as S1, S2, etc."""

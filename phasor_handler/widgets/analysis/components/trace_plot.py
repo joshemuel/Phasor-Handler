@@ -59,7 +59,7 @@ class TraceplotWidget(QWidget):
         self.ylim_min_edit.setFixedWidth(70)
         self.ylim_min_edit.setFixedHeight(20)
         self.ylim_min_edit.setRange(-999999.99, 999999.99)
-        self.ylim_min_edit.setSingleStep(0.001)
+        self.ylim_min_edit.setSingleStep(0.01)
         self.ylim_min_edit.setDecimals(3)
         self.ylim_min_edit.setValue(-0.05)  # Start at a neutral value
         self.ylim_min_edit.setEnabled(False)  # Disabled until ROI is drawn
@@ -69,7 +69,7 @@ class TraceplotWidget(QWidget):
         self.ylim_max_edit.setFixedWidth(70)
         self.ylim_max_edit.setFixedHeight(20)
         self.ylim_max_edit.setRange(-999999.99, 999999.99)
-        self.ylim_max_edit.setSingleStep(0.001)
+        self.ylim_max_edit.setSingleStep(0.01)
         self.ylim_max_edit.setDecimals(3)
         self.ylim_max_edit.setValue(0.5)  # Start at a neutral value
         self.ylim_max_edit.setEnabled(False)  # Disabled until ROI is drawn
