@@ -556,6 +556,24 @@ class RoiListWidget(QWidget):
             else:
                 formula_index = 0  # Default to first formula
             
+            import re
+            # Get pixel size from metadata for area calculations (exact same as meta_info.py)
+            pixel_size_microns = None
+            if hasattr(self.main_window, '_exp_data') and self.main_window._exp_data:
+                metadata = self.main_window._exp_data
+                if isinstance(metadata, dict) and 'pixel_size' in metadata:
+                    # Extract pixel_size directly from metadata dictionary
+                    value = metadata['pixel_size']
+                    value = re.sub(r'[^0-9.]+', '', str(value))
+                    if value:
+                        pixel_size_microns = float(value)
+                        print(f"DEBUG: Extracted pixel_size: {pixel_size_microns} μm/pixel")
+            
+            if pixel_size_microns:
+                print(f"Using pixel size: {pixel_size_microns} μm/pixel for area calculations")
+            else:
+                print("Warning: Pixel size not found in metadata. Area will be reported in pixels²")
+            
             # Progress tracking for large datasets
             total_work = nframes * len(self.main_window._saved_rois)
             if total_work > 1000:
@@ -597,7 +615,8 @@ class RoiListWidget(QWidget):
                 headers.extend([
                     f"Green_Mean_ROI{roi_num}",
                     f"Red_Mean_ROI{roi_num}",
-                    f"Trace_ROI{roi_num}"
+                    f"Trace_ROI{roi_num}",
+                    f"Area_ROI{roi_num}"
                 ])
             
             # Pre-calculate baseline (Fog) for each ROI using first 10% of frames
@@ -839,7 +858,27 @@ class RoiListWidget(QWidget):
                     red_str = f"{red_mean:.6f}" if isinstance(red_mean, (int, float)) else str(red_mean)
                     trace_str = f"{trace_value:.6f}" if isinstance(trace_value, (int, float)) else str(trace_value)
                     
-                    row_data.extend([green_str, red_str, trace_str])
+                    # Calculate ROI area
+                    try:
+                        if roi_height > 0 and roi_width > 0 and mask is not None:
+                            # Count pixels inside the mask
+                            pixel_count = np.sum(mask)
+                            
+                            # Convert to area in square microns if pixel size is available
+                            if pixel_size_microns is not None:
+                                area_microns_sq = pixel_count * (pixel_size_microns ** 2)
+                                area_str = f"{area_microns_sq:.4f}"
+                            else:
+                                # Report area in pixels if no pixel size
+                                area_str = f"{pixel_count:.0f}"
+                                print("Warning: Pixel size not available, reporting area in pixels²")
+                        else:
+                            area_str = "N/A"
+                    except Exception as e:
+                        print(f"Error calculating area for ROI {i+1}, frame {frame_idx}: {e}")
+                        area_str = "N/A"
+                    
+                    row_data.extend([green_str, red_str, trace_str, area_str])
                 
                 export_data.append(row_data)
             
