@@ -77,6 +77,10 @@ class CircleRoiTool(QObject):
         self._freehand_points_origin = None  # List of original freehand points for transformations
         # whether to show the small mode text in the overlay (can be toggled by view)
         self._show_mode_text = True
+        
+        # Multi-selection support for moving multiple ROIs simultaneously
+        self._selected_roi_indices = []  # List of indices of selected ROIs
+        self._multi_roi_origins = None  # Dict storing original positions during multi-ROI drag
 
     def set_draw_rect(self, rect: QRect):
         """Rectangle where the scaled pixmap is drawn inside the label."""
@@ -145,6 +149,53 @@ class CircleRoiTool(QObject):
         # Repaint overlay to show any mode-specific visual cues
         if self._base_pixmap is not None:
             self._paint_overlay()
+
+    def finalize_multi_roi_movement(self):
+        """Finalize the multi-ROI movement and clear the origin state."""
+        if self._multi_roi_origins is not None and len(self._multi_roi_origins) > 0:
+            # Clear the origin state - movements are already applied to _saved_rois
+            self._multi_roi_origins = None
+            self._paint_overlay()
+            print(f"DEBUG: Multi-ROI movement finalized for {len(self._selected_roi_indices)} ROIs")
+            return True
+        return False
+
+    def revert_multi_roi_movement(self):
+        """Revert the multi-ROI movement back to original positions."""
+        if self._multi_roi_origins is not None and len(self._multi_roi_origins) > 0:
+            # Restore original positions for all moved ROIs
+            for idx, origin in self._multi_roi_origins.items():
+                if 0 <= idx < len(self._saved_rois):
+                    roi = self._saved_rois[idx]
+                    ox, oy, ow, oh = origin['bbox']
+                    
+                    # Convert original bbox back to image coordinates
+                    if self._draw_rect and self._img_w and self._img_h:
+                        scale_x = self._img_w / float(self._draw_rect.width())
+                        scale_y = self._img_h / float(self._draw_rect.height())
+                        
+                        img_x0 = (ox - self._draw_rect.left()) * scale_x
+                        img_y0 = (oy - self._draw_rect.top()) * scale_y
+                        img_x1 = img_x0 + (ow * scale_x)
+                        img_y1 = img_y0 + (oh * scale_y)
+                        
+                        # Restore original xyxy
+                        roi['xyxy'] = (img_x0, img_y0, img_x1, img_y1)
+                        
+                        # Restore original freehand points if they existed
+                        if origin.get('freehand_points'):
+                            roi['points'] = origin['freehand_points']
+            
+            # Clear the origin state
+            self._multi_roi_origins = None
+            self._paint_overlay()
+            print(f"DEBUG: Multi-ROI movement reverted for {len(self._selected_roi_indices)} ROIs")
+            return True
+        return False
+
+    def is_multi_roi_preview_active(self):
+        """Check if there's a pending multi-ROI movement preview."""
+        return self._multi_roi_origins is not None and len(self._multi_roi_origins) > 0
 
     def _get_bbox_center(self):
         """Get the center point of the current bbox."""
@@ -315,6 +366,31 @@ class CircleRoiTool(QObject):
             if event.button() == Qt.MouseButton.RightButton and self._mode != 'draw':
                 p = event.position()  # QPointF
                 
+                # Check if multiple ROIs are selected
+                if len(self._selected_roi_indices) > 1:
+                    # Multi-selection mode - move all selected ROIs together
+                    print(f"DEBUG: Multi-ROI drag started - moving {len(self._selected_roi_indices)} ROIs")
+                    self._mode = 'translate'
+                    self._dragging = True
+                    self._translate_anchor = p
+                    
+                    # Store original positions of all selected ROIs
+                    self._multi_roi_origins = {}
+                    for idx in self._selected_roi_indices:
+                        if 0 <= idx < len(self._saved_rois):
+                            roi = self._saved_rois[idx]
+                            xyxy = roi.get('xyxy')
+                            if xyxy:
+                                lbbox = self._label_bbox_from_image_xyxy(xyxy)
+                                if lbbox:
+                                    self._multi_roi_origins[idx] = {
+                                        'bbox': lbbox,
+                                        'rotation': roi.get('rotation', 0.0),
+                                        'freehand_points': roi.get('points', None)
+                                    }
+                    return True
+                
+                # Single selection mode - original behavior
                 # First, check if we're clicking on any saved ROI
                 roi_index = self._find_roi_at_point(p)
                 if roi_index is not None:
@@ -425,31 +501,82 @@ class CircleRoiTool(QObject):
                     self.roiChanged.emit(xyxy)
                 return True
 
-            elif self._mode == 'translate' and self._bbox_origin is not None and self._translate_anchor is not None:
-                # compute delta and move bbox using float math to avoid size drift
-                anchor = self._translate_anchor
-                dx = pos.x() - anchor.x()
-                dy = pos.y() - anchor.y()
-                ox, oy, ow, oh = self._bbox_origin
-                new_left = ox + dx
-                new_top = oy + dy
-                
-                self._bbox = (new_left, new_top, ow, oh)
-                
-                # Also translate freehand points if they exist
-                if self._freehand_points_origin:
-                    self._freehand_points = []
-                    for pt in self._freehand_points_origin:
-                        new_pt = QPointF(pt.x() + dx, pt.y() + dy)
-                        self._freehand_points.append(new_pt)
+            elif self._mode == 'translate' and self._translate_anchor is not None:
+                # Check if we're in multi-ROI mode
+                if self._multi_roi_origins is not None and len(self._multi_roi_origins) > 0:
+                    # Multi-ROI translation mode
+                    anchor = self._translate_anchor
+                    dx = pos.x() - anchor.x()
+                    dy = pos.y() - anchor.y()
                     
-                    # Recalculate bbox from translated points to ensure center alignment
-                    self._update_bbox_from_freehand_points()
+                    # Update all selected ROIs positions
+                    for idx, origin in self._multi_roi_origins.items():
+                        if 0 <= idx < len(self._saved_rois):
+                            roi = self._saved_rois[idx]
+                            ox, oy, ow, oh = origin['bbox']
+                            new_left = ox + dx
+                            new_top = oy + dy
+                            
+                            # Convert back to image coordinates
+                            if self._draw_rect and self._img_w and self._img_h:
+                                scale_x = self._img_w / float(self._draw_rect.width())
+                                scale_y = self._img_h / float(self._draw_rect.height())
+                                
+                                img_x0 = (new_left - self._draw_rect.left()) * scale_x
+                                img_y0 = (new_top - self._draw_rect.top()) * scale_y
+                                img_x1 = img_x0 + (ow * scale_x)
+                                img_y1 = img_y0 + (oh * scale_y)
+                                
+                                # Update the ROI's xyxy coordinates
+                                roi['xyxy'] = (img_x0, img_y0, img_x1, img_y1)
+                                
+                                # If this ROI has freehand points, translate them too
+                                if origin.get('freehand_points'):
+                                    original_points = origin['freehand_points']
+                                    translated_points = []
+                                    for pt in original_points:
+                                        # Points are stored in image coordinates
+                                        # Convert to label coordinates, translate, convert back
+                                        label_x = self._draw_rect.left() + (pt[0] / scale_x)
+                                        label_y = self._draw_rect.top() + (pt[1] / scale_y)
+                                        new_label_x = label_x + dx
+                                        new_label_y = label_y + dy
+                                        new_img_x = (new_label_x - self._draw_rect.left()) * scale_x
+                                        new_img_y = (new_label_y - self._draw_rect.top()) * scale_y
+                                        translated_points.append((new_img_x, new_img_y))
+                                    roi['points'] = translated_points
+                    
+                    # Repaint to show all ROIs in their new positions
+                    self._paint_overlay()
+                    print(f"DEBUG: Moving {len(self._multi_roi_origins)} ROIs by ({dx:.1f}, {dy:.1f})")
+                    return True
                 
-                self._paint_overlay()
-                xyxy = self._current_roi_image_coords()
-                if xyxy is not None:
-                    self.roiChanged.emit(xyxy)
+                # Single ROI translation (original behavior)
+                if self._bbox_origin is not None:
+                    # compute delta and move bbox using float math to avoid size drift
+                    anchor = self._translate_anchor
+                    dx = pos.x() - anchor.x()
+                    dy = pos.y() - anchor.y()
+                    ox, oy, ow, oh = self._bbox_origin
+                    new_left = ox + dx
+                    new_top = oy + dy
+                    
+                    self._bbox = (new_left, new_top, ow, oh)
+                    
+                    # Also translate freehand points if they exist
+                    if self._freehand_points_origin:
+                        self._freehand_points = []
+                        for pt in self._freehand_points_origin:
+                            new_pt = QPointF(pt.x() + dx, pt.y() + dy)
+                            self._freehand_points.append(new_pt)
+                        
+                        # Recalculate bbox from translated points to ensure center alignment
+                        self._update_bbox_from_freehand_points()
+                    
+                    self._paint_overlay()
+                    xyxy = self._current_roi_image_coords()
+                    if xyxy is not None:
+                        self.roiChanged.emit(xyxy)
                 return True
 
             elif self._mode == 'rotate' and self._rotation_anchor is not None:
@@ -539,6 +666,20 @@ class CircleRoiTool(QObject):
 
             if self._mode == 'translate' and event.button() == Qt.MouseButton.RightButton:
                 self._dragging = False
+                
+                # Check if we're in multi-ROI mode
+                if self._multi_roi_origins is not None and len(self._multi_roi_origins) > 0:
+                    # Don't finalize yet - keep preview state until 'r' is pressed
+                    self._translate_anchor = None
+                    self._mode = None
+                    
+                    # Keep _multi_roi_origins so we can revert if needed
+                    # Repaint to show preview positions
+                    self._paint_overlay()
+                    print(f"DEBUG: Multi-ROI drag completed - press 'r' to finalize or Escape to revert")
+                    return True
+                
+                # Single ROI translation finalization (original behavior)
                 # finalize translation
                 self._translate_anchor = None
                 self._bbox_origin = None
@@ -764,7 +905,11 @@ class CircleRoiTool(QObject):
                         lx0, ly0, lw, lh = lbbox
                         px0 = float(lx0) - offset_x
                         py0 = float(ly0) - offset_y
-                        # determine color
+                        
+                        # Check if this ROI is selected
+                        is_selected = idx in self._selected_roi_indices
+                        
+                        # determine color - use brighter/thicker pen for selected ROIs
                         col = saved.get('color')
                         if isinstance(col, QColor):
                             qcol = col
@@ -773,8 +918,14 @@ class CircleRoiTool(QObject):
                             qcol = QColor(int(col[0]), int(col[1]), int(col[2]), int(a))
                         else:
                             qcol = QColor(200, 100, 10, 200)
-                        spen = QPen(qcol)
-                        spen.setWidth(3)
+                        
+                        # Highlight selected ROIs with thicker, brighter border
+                        if is_selected:
+                            spen = QPen(QColor(255, 255, 0, 255))  # Bright yellow
+                            spen.setWidth(5)
+                        else:
+                            spen = QPen(qcol)
+                            spen.setWidth(3)
                         painter.setPen(spen)
                         
                         # Check ROI type
@@ -937,6 +1088,21 @@ class CircleRoiTool(QObject):
             font.setBold(True)
             painter.setFont(font)
             painter.drawText(10, 25, mode_text)
+        
+        # Draw multi-selection indicator when multiple ROIs are selected
+        if len(self._selected_roi_indices) > 1 and getattr(self, '_show_mode_text', True):
+            # Check if we're in preview mode (after drag, before finalize)
+            if self._multi_roi_origins is not None and len(self._multi_roi_origins) > 0:
+                multi_text = f"Preview: {len(self._selected_roi_indices)} ROIs moved - Press 'R' to finalize, Escape to revert"
+                painter.setPen(QPen(QColor(255, 165, 0, 255)))  # Orange for preview
+            else:
+                multi_text = f"Selected: {len(self._selected_roi_indices)} ROIs (right-click drag to move all)"
+                painter.setPen(QPen(QColor(255, 255, 0, 255)))  # Bright yellow
+            font = QFont()
+            font.setPointSize(11)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(10, 50, multi_text)
 
         painter.end()
         self._label.setPixmap(overlay)
