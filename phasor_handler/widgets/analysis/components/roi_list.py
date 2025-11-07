@@ -48,9 +48,9 @@ class RoiListWidget(QWidget):
         
         # ROI list widget
         self.roi_list_widget = QListWidget()
-        self.roi_list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.roi_list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.roi_list_widget.setMinimumWidth(220)
-        self.roi_list_widget.itemSelectionChanged.connect(self._on_roi_selection_changed)
+        self.roi_list_widget.currentItemChanged.connect(self._on_saved_roi_selected)
         roi_vbox.addWidget(self.roi_list_widget)
         
         # Button grid layout
@@ -258,94 +258,26 @@ class RoiListWidget(QWidget):
             self.main_window.roi_tool._paint_overlay()
     
     def _on_remove_roi_clicked(self):
-        """Remove selected saved ROI(s) from widget and in-memory store."""
-        selected_items = self.roi_list_widget.selectedItems()
-        if not selected_items:
+        """Remove selected saved ROI from widget and in-memory store."""
+        item = self.roi_list_widget.currentItem()
+        if not item:
             return
-        
-        # Get indices of selected items (sort in reverse to delete from end to start)
-        selected_rows = sorted([self.roi_list_widget.row(item) for item in selected_items], reverse=True)
-        
-        if len(selected_rows) > 1:
-            # Confirm multi-deletion
-            from PyQt6.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
-                self, 
-                'Remove Multiple ROIs',
-                f'Are you sure you want to remove {len(selected_rows)} ROIs?',
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+        row = self.roi_list_widget.row(item)
+        self.roi_list_widget.takeItem(row)
         
         try:
             if hasattr(self.main_window, '_saved_rois'):
-                # Remove items from list (from end to start to preserve indices)
-                for row in selected_rows:
-                    self.roi_list_widget.takeItem(row)
-                    if 0 <= row < len(self.main_window._saved_rois):
-                        del self.main_window._saved_rois[row]
-                        # Emit removal signal
-                        self.roiRemoved.emit(row)
-                
+                del self.main_window._saved_rois[row]
                 # Update the ROI tool with remaining saved ROIs
                 if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
                     self.main_window.roi_tool.set_saved_rois(self.main_window._saved_rois)
-                    # Clear selection indices
-                    self.main_window.roi_tool._selected_roi_indices = []
                     # Repaint overlay to show updated ROIs
                     self.main_window.roi_tool._paint_overlay()
                 
-                print(f"DEBUG: Removed {len(selected_rows)} ROI(s)")
-        except Exception as e:
-            print(f"Error removing ROIs: {e}")
-    
-    def _on_roi_selection_changed(self):
-        """Handle ROI selection changes - supports both single and multi-selection."""
-        selected_items = self.roi_list_widget.selectedItems()
-        selected_indices = [self.roi_list_widget.row(item) for item in selected_items]
-        
-        print(f"DEBUG: ROI selection changed - {len(selected_indices)} ROI(s) selected: {selected_indices}")
-        
-        # Store selected indices on the ROI tool for use during dragging
-        if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
-            self.main_window.roi_tool._selected_roi_indices = selected_indices
-        
-        if len(selected_indices) == 0:
-            # No selection - clear the trace and ROI display
-            self._editing_roi_index = None
-            if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
-                self.main_window.roi_tool.clear_selection()
-            # Clear trace
-            if hasattr(self.main_window, 'trace_plot_widget'):
-                self.main_window.trace_plot_widget.clear_trace()
-            print("DEBUG: No ROIs selected - cleared display")
-            
-        elif len(selected_indices) == 1:
-            # Single selection - restore the ROI and update trace (existing behavior)
-            row = selected_indices[0]
-            item = selected_items[0]
-            self._on_saved_roi_selected(item)
-            print(f"DEBUG: Single ROI selected - showing ROI {row + 1}")
-            
-        else:
-            # Multiple selection - show all selected ROIs but disable trace
-            self._editing_roi_index = None
-            print(f"DEBUG: Multiple ROIs selected ({len(selected_indices)}) - trace disabled")
-            
-            # Clear any single ROI display
-            if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
-                self.main_window.roi_tool.clear_selection()
-            
-            # Clear trace plot and show message about multi-selection
-            if hasattr(self.main_window, 'trace_plot_widget'):
-                self.main_window.trace_plot_widget.clear_trace()
-                # Optionally show a message that trace is disabled during multi-select
-                
-            # Highlight all selected ROIs by repainting the overlay
-            if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
-                self.main_window.roi_tool._paint_overlay()
+                # Emit removal signal
+                self.roiRemoved.emit(row)
+        except Exception:
+            pass
     
     def _on_saved_roi_selected(self, current, previous=None):
         """Restore the selected saved ROI onto the image/roi tool and update trace."""
