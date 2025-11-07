@@ -332,6 +332,8 @@ class MetadataViewer(QDialog):
                     value = re.sub(r'[^0-9.]+', '', str(value))
                 elif key == "FOV_size": 
                     key = "FOV Size (µm)"
+                    # Parse FOV_size to format as "206 x 176" (without μm on individual values)
+                    # Example input: "206μm x 176μm"
                     value = str(value).replace('μm', '').replace('um', '').replace('microns', '').strip()
 
                 self.add_info_row(self.image_layout, row, key.replace('_', ' '), 
