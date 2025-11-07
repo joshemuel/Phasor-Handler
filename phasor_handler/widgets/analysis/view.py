@@ -1557,6 +1557,19 @@ class AnalysisWidget(QWidget):
         from PyQt6.QtCore import Qt
         
         if event.key() == Qt.Key.Key_Escape:
+            # Check if we're reverting a multi-ROI movement preview
+            if (hasattr(self, 'roi_tool') and self.roi_tool and 
+                hasattr(self.roi_tool, 'is_multi_roi_preview_active') and
+                self.roi_tool.is_multi_roi_preview_active()):
+                print("DEBUG: Escape key pressed - reverting multi-ROI movement")
+                self.roi_tool.revert_multi_roi_movement()
+                # Update the ROI tool display
+                if hasattr(self.window, '_saved_rois'):
+                    self.roi_tool.set_saved_rois(self.window._saved_rois)
+                event.accept()
+                return
+            
+            # Original Escape behavior: clear selection and trace
             # Clear only the current interactive selection and trace; keep saved ROIs visible
             # Also clear editing state
             self._editing_roi_index = None
@@ -1584,6 +1597,19 @@ class AnalysisWidget(QWidget):
             event.accept()
         # Else if R is pressed and an ROI box is drawn
         elif event.key() == Qt.Key.Key_R:
+            # Check if we're finalizing a multi-ROI movement
+            if (hasattr(self, 'roi_tool') and self.roi_tool and 
+                hasattr(self.roi_tool, 'is_multi_roi_preview_active') and
+                self.roi_tool.is_multi_roi_preview_active()):
+                print("DEBUG: R key pressed - finalizing multi-ROI movement")
+                self.roi_tool.finalize_multi_roi_movement()
+                # Update the ROI tool display
+                if hasattr(self.window, '_saved_rois'):
+                    self.roi_tool.set_saved_rois(self.window._saved_rois)
+                event.accept()
+                return
+            
+            # Original behavior: add/update single ROI
             # Only add ROI if there's actually a current ROI drawn and user is not currently drawing
             roi_tool_dragging = (hasattr(self, 'roi_tool') and 
                                 getattr(self.roi_tool, '_dragging', False))
