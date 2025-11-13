@@ -291,7 +291,7 @@ class MetadataViewer(QDialog):
             self.add_info_row(self.stim_layout, row, "Camera Frame Rate (Hz)", str(camera_framerate))
         else:
             # 3i: Show stimulation information
-            stim_keys = ['stimulation_timeframes', 'stimulation_ms', 'duty_cycle', 'stimulated_roi_location', 'stimulated_rois']
+            stim_keys = ['stimulation_timeframes', 'stimulation_ms', 'duty_cycle', 'stimulated_roi_location', 'stimulated_rois', 'stimulated_roi_powers']
             for key in stim_keys:
                 if key in self.metadata:
                     value = self.metadata[key]
@@ -315,6 +315,9 @@ class MetadataViewer(QDialog):
                             else:
                                 display_value = ', '.join([', '.join(map(str, x)) for x in value])
                             key = "Stimulated ROIs"
+                        elif key == 'stimulated_roi_powers':
+                            display_value = ', '.join(map(str, value))
+                            key = "Stimulated ROI Powers"
                     else:
                         display_value = str(value)
                     self.add_info_row(self.stim_layout, row, key.replace('_', ' '), 

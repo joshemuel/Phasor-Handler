@@ -7,7 +7,6 @@ Command-line interface for running Phasor Handler from pip installation.
 
 import sys
 
-
 def main():
     """Main entry point for the Phasor Handler application."""
     try:
