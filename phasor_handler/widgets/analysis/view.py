@@ -283,6 +283,10 @@ class AnalysisWidget(QWidget):
         self.roi_list_component.roiSelected.connect(self._on_roi_component_selected)
         self.roi_list_component.roiAdded.connect(self._on_roi_component_added)
         
+        # Connect new Shift+RightClick signal
+        if hasattr(self, 'roi_tool'):
+            self.roi_tool.roiSelectionToggled.connect(self.roi_list_component.toggle_roi_selection)
+        
         # Expose the internal list widget for backward compatibility
         self.roi_list_widget = self.roi_list_component.get_list_widget()
 

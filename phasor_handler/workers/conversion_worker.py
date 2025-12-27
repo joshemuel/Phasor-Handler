@@ -37,9 +37,12 @@ class ConversionWorker(QObject):
                 if any(fname.endswith("000.npy") for fname in os.listdir(conv_dir)):
                     source_type = "i3"
                     self.log.emit("Detected i3 source based on file pattern.")
-                else:
+                elif "CellVideo1" in os.listdir(conv_dir):
                     source_type = "mini"
                     self.log.emit("Detected mini source based on file pattern.")
+                else:
+                    self.log.emit(f"Can't detect file type for {conv_dir}")
+                    continue
                 
                 # 1. Run convert.py
                 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))

@@ -1,0 +1,5 @@
+test_data/
+sv/
+*__pycache__/
+dist/
+phasor_handler.egg-info/

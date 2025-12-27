@@ -1012,10 +1012,22 @@ class RoiListWidget(QWidget):
         try:
             # Select the corresponding item in the ROI list widget
             if 0 <= roi_index < self.roi_list_widget.count():
+                # Clear any existing multi-selection first to ensure single selection
+                self.roi_list_widget.clearSelection()
                 self.roi_list_widget.setCurrentRow(roi_index)
                 print(f"Auto-selected ROI {roi_index + 1} by right-click")
         except Exception as e:
             print(f"Error selecting ROI by click: {e}")
+
+    def toggle_roi_selection(self, roi_index):
+        """Toggle selection of an ROI in the list (Shift+Click behavior)."""
+        try:
+            if 0 <= roi_index < self.roi_list_widget.count():
+                item = self.roi_list_widget.item(roi_index)
+                item.setSelected(not item.isSelected())
+                print(f"DEBUG: Toggled ROI {roi_index + 1} selection. New state: {item.isSelected()}")
+        except Exception as e:
+            print(f"Error toggling ROI selection: {e}")
     
     def refresh_roi_display(self):
         """Refresh the ROI display in the ROI tool."""

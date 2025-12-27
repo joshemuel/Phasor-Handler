@@ -135,13 +135,29 @@ class MainWindow(QMainWindow):
         tab_text = self.tabs.tabText(idx)
         if tab_text == "First Level":
             if hasattr(self, 'analysis_list_widget'):
+                # Capture current selection to persist it
+                current_path = None
+                selected_items = self.analysis_list_widget.selectedItems()
+                if selected_items:
+                    current_path = selected_items[0].data(Qt.ItemDataRole.UserRole)
+                
+                # Block signals to prevent unnecessary clearing/reloading of the image
+                self.analysis_list_widget.blockSignals(True)
                 self.analysis_list_widget.clear()
+                
                 from PyQt6.QtWidgets import QListWidgetItem
                 for full_path, display_name in self.dir_manager.get_display_names():
                     item = QListWidgetItem(display_name)
                     item.setToolTip(full_path)
                     item.setData(Qt.ItemDataRole.UserRole, full_path)
                     self.analysis_list_widget.addItem(item)
+                    
+                    # Restore selection if it matches
+                    if current_path is not None and full_path == current_path:
+                        item.setSelected(True)
+                        self.analysis_list_widget.setCurrentItem(item)
+                
+                self.analysis_list_widget.blockSignals(False)
         elif tab_text == "Second Level":
             # Trigger refresh of second level plots when tab is shown
             if hasattr(self, 'second_level_widget'):
