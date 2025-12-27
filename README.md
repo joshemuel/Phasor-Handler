@@ -1,10 +1,10 @@
 # Phasor-Handler (Windows)
 
-Phasor Handler is a toolbox for processing raw two-photon phasor imaging data: **convert → register → explore → extract calcium traces**.  
+Phasor Handler is a toolbox for processing raw two-photon phasor imaging data:  **convert → register → explore → extract calcium traces**.  
 It provides a PyQt6 GUI for viewing registered or raw stacks (Ch1/Ch2), z-projections (std/max/mean), drawing/storing ROIs, overlaying stimulated ROIs from metadata, and exporting ROI traces.
 
 > ⚠️ **Platform:** Windows 10/11 only  
-> 🧪 Status: actively developed (Brightness & Contrast dialog is WIP)
+> 🧪 Status:  actively developed (Brightness & Contrast dialog is WIP)
 
 ---
 
@@ -25,10 +25,10 @@ It provides a PyQt6 GUI for viewing registered or raw stacks (Ch1/Ch2), z-projec
 
 ## Input data layout
 
-For each dataset directory, Phasor Handler looks for any of:
+For each dataset directory, Phasor Handler looks for any of: 
 
 - Ch1-reg.tif
-- Ch2-reg.tif                 # optional
+- Ch2-reg. tif                 # optional
 - ImageData_Ch0_TP0000000.npy # raw fallback for Ch1
 - ImageData_Ch1_TP0000000.npy # optional raw fallback for Ch2
 - experiment_summary.pkl      # optional metadata (or .json)
@@ -37,40 +37,77 @@ Registered TIFFs are preferred when available; raw NPYs are used as fallback.
 
 ---
 
-## Installation (Windows, Conda)
+## Installation
+
+Phasor Handler is now available on **PyPI** and can be installed via pip or from source using Conda/Mamba. 
+
+### Option 1: Install via pip (Recommended)
+
+The easiest way to install Phasor Handler is through pip:
+
+```powershell
+pip install phasor-handler
+```
+
+After installation, you can run the application: 
+
+```powershell
+phasor-handler
+```
+
+**PyPI Package:** [https://pypi.org/project/phasor-handler/](https://pypi.org/project/phasor-handler/)
+
+### Option 2: Install from source (Windows, Conda)
 
 This project provides an `environment.yml` for Windows. The environment is large (GUI, image I/O, napari/suite2p), so **mamba** is recommended, but `conda` works too.
 
-### 1) Install Conda/Mamba (if needed)
+#### 1) Install Conda/Mamba (if needed)
 - Install **Miniconda** or **Mambaforge** on Windows.
 - (Optional) Add mamba for faster solves:
   ```powershell
   conda install -n base -c conda-forge mamba
+  ```
 
-### 2) Get the code
-- Clone the repo and change it into
+#### 2) Get the code
+- Clone the repo and change into it:
   ```powershell
   git clone https://github.com/joshemuel/Phasor-Handler.git
-  chdir Phasor-Handler
-- Alternatively, you can download the entire project as a zip file, unzip it, then open that directory in **Miniconda**
   cd Phasor-Handler
+  ```
+- Alternatively, you can download the entire project as a zip file, unzip it, then open that directory in **Miniconda**
 
-### 3) Create the environment
+#### 3) Create the environment
 - Using mamba:
   ```powershell
   mamba env create -f environment.yml
+  ```
 - Using conda:
   ```powershell
   conda env create -f environment.yml
+  ```
 
-# 4) Activate and run
-- Before running the toolbox, activate the environment
+#### 4) Activate and run
+- Before running the toolbox, activate the environment:
   ```powershell
   conda activate suite2p
   python app.py
+  ```
+
+---
+
 ## Update (Windows, Conda)
 
-### 1) Go to your local repo and pull the latest code from the branch you use
+### If installed via pip: 
 ```powershell
-chdir Phasor-Handler
+pip install --upgrade phasor-handler
+```
+
+### If installed from source: 
+
+#### 1) Go to your local repo and pull the latest code from the branch you use
+```powershell
+cd Phasor-Handler
 git pull --ff-only
+```
+
+---
