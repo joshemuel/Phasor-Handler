@@ -4,7 +4,7 @@ Phasor Handler is a toolbox for processing raw two-photon phasor imaging data:  
 It provides a PyQt6 GUI for viewing registered or raw stacks (Ch1/Ch2), z-projections (std/max/mean), drawing/storing ROIs, overlaying stimulated ROIs from metadata, and exporting ROI traces.
 
 > ⚠️ **Platform:** Windows 10/11 only  
-> 🧪 Status:  actively developed (Brightness & Contrast dialog is WIP)
+> 🚀 **Version 3.0** — Latest stable release
 
 ---
 
@@ -15,7 +15,10 @@ It provides a PyQt6 GUI for viewing registered or raw stacks (Ch1/Ch2), z-projec
 - Automated cell detection using Suite2p
 - Channel switching (Ch1/Ch2) and **Composite (G/R)**
 - **Z-projections**: standard deviation, max, mean
-- **ROI tools**: draw elliptical ROIs, translate or rotate ROIs, save/load as JSON, quick-select saved ROIs
+- **Brightness & Contrast (BnC)**: adjust image display settings
+- **ROI tools**: draw elliptical ROIs, **freehand drawing tool**, translate or rotate ROIs, **move multiple ROIs**, save/load as JSON, quick-select saved ROIs
+- **Metadata viewer**: inspect experiment metadata directly in the application
+- **Second-level analysis viewer**: explore and visualize second-level analysis results
 - **Stimulus overlay**: show stimulated ROI locations from experiment metadata and add to the saved ROIs
 - **Trace plotting**: configurable formula, custom y-limits, frame/time (s) x-axis
 - **Export**: write per-ROI traces for all frames to `.txt` (tab-separated)
