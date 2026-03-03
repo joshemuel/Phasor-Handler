@@ -16,8 +16,8 @@ class SecondLevelWorker(QObject):
     progress = pyqtSignal(int, int)  # (current, total)
     error = pyqtSignal(str)
     
-    def __init__(self, saved_rois, tif, tif_chan2, formula_idx, baseline_pct, 
-                 frame_start, frame_end, page_rois_slice):
+    def __init__(self, saved_rois, tif, tif_chan2, formula_idx, baseline_seconds, 
+                 frame_start, frame_end, page_rois_slice, time_stamps=None, frame_rate=None):
         """
         Initialize worker.
         
@@ -26,20 +26,24 @@ class SecondLevelWorker(QObject):
             tif: Channel 1 image data (3D numpy array)
             tif_chan2: Channel 2 image data (3D numpy array or None)
             formula_idx: Formula selection index (0-3)
-            baseline_pct: Baseline percentage (1-99)
+            baseline_seconds: Baseline duration in seconds
             frame_start: Starting frame for display
             frame_end: Ending frame for display (or None for all)
             page_rois_slice: Tuple of (start_idx, end_idx) for current page
+            time_stamps: Optional list of timestamps from metadata
+            frame_rate: Optional frame rate from metadata
         """
         super().__init__()
         self.saved_rois = saved_rois
         self.tif = tif
         self.tif_chan2 = tif_chan2
         self.formula_idx = formula_idx
-        self.baseline_pct = baseline_pct
+        self.baseline_seconds = float(baseline_seconds)
         self.frame_start = frame_start
         self.frame_end = frame_end
         self.page_rois_slice = page_rois_slice
+        self.time_stamps = time_stamps
+        self.frame_rate = frame_rate
         
     def run(self):
         """Extract traces for all ROIs on the current page."""
@@ -72,6 +76,48 @@ class SecondLevelWorker(QObject):
             error_msg = f"Error computing traces: {e}\n{traceback.format_exc()}"
             print(error_msg)
             self.error.emit(error_msg)
+
+    def _seconds_to_frame_count(self, nframes):
+        """Convert baseline_seconds to a frame count using available timing info."""
+        seconds = self.baseline_seconds
+
+        # --- Try timestamps first ---
+        if self.time_stamps is not None and len(self.time_stamps) > 0:
+            try:
+                if isinstance(self.time_stamps[0], str):
+                    from datetime import datetime
+                    first_dt = datetime.strptime(self.time_stamps[0], '%Y-%m-%d %H:%M:%S.%f')
+                    for idx in range(min(nframes, len(self.time_stamps))):
+                        dt = datetime.strptime(self.time_stamps[idx], '%Y-%m-%d %H:%M:%S.%f')
+                        elapsed = (dt - first_dt).total_seconds()
+                        if elapsed >= seconds:
+                            return max(1, idx)
+                    return min(nframes, len(self.time_stamps))
+                else:
+                    ts_arr = np.asarray(self.time_stamps[:min(nframes, len(self.time_stamps))], dtype=float)
+                    max_t = float(ts_arr[-1]) if len(ts_arr) > 0 else 0
+                    if max_t > 10000:
+                        target = seconds * 1000.0
+                    else:
+                        target = seconds
+                    indices = np.where(ts_arr >= target)[0]
+                    if len(indices) > 0:
+                        return max(1, int(indices[0]))
+                    return min(nframes, len(ts_arr))
+            except Exception:
+                pass
+
+        # --- Fallback: frame_rate ---
+        if self.frame_rate is not None and self.frame_rate != 'NA':
+            try:
+                fr = float(self.frame_rate)
+                if fr > 0:
+                    return max(1, int(np.ceil(fr * seconds)))
+            except (ValueError, TypeError):
+                pass
+
+        # --- Last resort: 10% ---
+        return max(1, nframes // 10)
     
     def _extract_roi_trace(self, roi_data):
         """Extract the mean signal trace for a given ROI with selected formula."""
@@ -113,9 +159,10 @@ class SecondLevelWorker(QObject):
                 tif_chan2 = stack3d(self.tif_chan2)
                 sig2 = tif_chan2[:, y0:y1, x0:x1].mean(axis=(1, 2))
             
-            # Compute baseline (Fo) from first N% of frames
+            # Compute baseline (Fo) from first N seconds of frames
             nframes = len(sig1)
-            baseline_count = max(1, int(np.ceil(nframes * self.baseline_pct / 100.0)))
+            baseline_count = self._seconds_to_frame_count(nframes)
+            baseline_count = max(1, min(baseline_count, nframes))
             Fog = float(np.mean(sig1[:baseline_count]))
             
             # Apply formula

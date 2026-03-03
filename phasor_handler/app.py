@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
 
 from .widgets import ConversionWidget, RegistrationWidget, AnalysisWidget, SecondLevelWidget
-from .workers import RegistrationWorker, ConversionWorker
+from .workers import RegistrationWorker, ConversionWorker, ConvertRegisterWorker
 from .models.dir_manager import DirManager
 from .themes import apply_dark_theme
 import qdarktheme
@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
             self.analysis_list_widget.clear()
 
         from PyQt6.QtWidgets import QListWidgetItem
+        # Conversion and Registration tabs keep insertion order
         for full_path, display_name in self.dir_manager.get_display_names():
             if hasattr(self, 'conv_list_widget'):
                 item = QListWidgetItem(display_name)
@@ -124,7 +125,9 @@ class MainWindow(QMainWindow):
                     self.reg_list_widget.addItem(item)
                 except RuntimeError:
                     pass
-            if hasattr(self, 'analysis_list_widget'):
+        # Analysis list is sorted by capture time
+        if hasattr(self, 'analysis_list_widget'):
+            for full_path, display_name in self.dir_manager.get_display_names(sort_by_time=True):
                 item = QListWidgetItem(display_name)
                 item.setToolTip(full_path)
                 item.setData(Qt.ItemDataRole.UserRole, full_path)
@@ -146,7 +149,7 @@ class MainWindow(QMainWindow):
                 self.analysis_list_widget.clear()
                 
                 from PyQt6.QtWidgets import QListWidgetItem
-                for full_path, display_name in self.dir_manager.get_display_names():
+                for full_path, display_name in self.dir_manager.get_display_names(sort_by_time=True):
                     item = QListWidgetItem(display_name)
                     item.setToolTip(full_path)
                     item.setData(Qt.ItemDataRole.UserRole, full_path)
@@ -261,6 +264,77 @@ class MainWindow(QMainWindow):
         self._reg_worker.finished.connect(_on_finished)
         self._reg_worker.error.connect(lambda e: self.reg_log.append(f"ERROR: {e}"))
         self._reg_thread.start()
+
+    def run_convert_and_register(self):
+        """Run conversion followed by registration on all directories in one step."""
+        if not self.selected_dirs:
+            QMessageBox.warning(self, "No Directories",
+                                "Please add at least one directory to the list before running.")
+            return
+
+        mode = self.mode_combo.currentText().lower()
+
+        # Gather registration parameters from the Registration tab
+        reg_params = {}
+        if hasattr(self, 'param_names') and hasattr(self, 'param_edits'):
+            for name, edit in zip(self.param_names, self.param_edits):
+                value = edit.text().strip()
+                if value:
+                    reg_params[name] = value
+
+        combine = True
+        if hasattr(self, 'combine_checkbox'):
+            combine = self.combine_checkbox.isChecked()
+
+        # Disable the button while running
+        run_btn = None
+        for w in self.findChildren(QPushButton):
+            if w.text().startswith("Convert + Register"):
+                run_btn = w
+                break
+        if run_btn:
+            run_btn.setEnabled(False)
+
+        self.conv_log.clear()
+        if hasattr(self, 'reg_log'):
+            self.reg_log.clear()
+
+        # Create thread and worker
+        self._cr_thread = QThread()
+        self._cr_worker = ConvertRegisterWorker(
+            self.selected_dirs.copy(), mode, reg_params, combine)
+        self._cr_worker.moveToThread(self._cr_thread)
+
+        # Connect signals
+        self._cr_thread.started.connect(self._cr_worker.run)
+        def _cr_log(s):
+            self.conv_log.append(s)
+            if hasattr(self, 'reg_log'):
+                self.reg_log.append(s)
+            QApplication.processEvents()
+        self._cr_worker.log.connect(_cr_log)
+
+        def _on_finished():
+            if run_btn:
+                run_btn.setEnabled(True)
+            self._cr_thread.quit()
+            self._cr_thread.wait()
+            self._cr_worker.deleteLater()
+            del self._cr_worker
+            del self._cr_thread
+
+        def _on_error(err_msg):
+            self.conv_log.append(f"[ERROR] {err_msg}")
+            if hasattr(self, 'reg_log'):
+                self.reg_log.append(f"[ERROR] {err_msg}")
+            QMessageBox.critical(self, "Convert+Register Error",
+                                 f"An error occurred:\n{err_msg}")
+
+        self._cr_worker.finished.connect(_on_finished)
+        self._cr_worker.error.connect(_on_error)
+
+        # Start the thread
+        self._cr_thread.start()
 
 def main():
     app = QApplication(sys.argv)

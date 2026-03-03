@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QScrollArea, QGridLayout, QSizePolicy,
     QDoubleSpinBox, QSpinBox, QComboBox, QCheckBox, QProgressBar
 )
-from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtCore import Qt, QThread, QLocale
 from phasor_handler.workers.secondlevel_worker import SecondLevelWorker
 
 
@@ -119,14 +119,20 @@ class SecondLevelWidget(QWidget):
         formula_layout.addWidget(self.formula_dropdown)
         formula_group.setLayout(formula_layout)
         
-        # Baseline percentage
+        # Baseline seconds
         baseline_group = QGroupBox("Baseline")
         baseline_layout = QHBoxLayout()
-        baseline_layout.addWidget(QLabel("Baseline %:"))
-        self.baseline_spinbox = QSpinBox()
-        self.baseline_spinbox.setRange(1, 99)
-        self.baseline_spinbox.setValue(10)
-        self.baseline_spinbox.setMaximumWidth(80)
+        baseline_layout.addWidget(QLabel("Baseline (s):"))
+        self.baseline_spinbox = QDoubleSpinBox()
+        c_locale = QLocale(QLocale.Language.C)
+        c_locale.setNumberOptions(QLocale.NumberOption.RejectGroupSeparator)
+        self.baseline_spinbox.setLocale(c_locale)
+        self.baseline_spinbox.setRange(0.1, 9999.0)
+        self.baseline_spinbox.setValue(5.0)
+        self.baseline_spinbox.setSingleStep(0.5)
+        self.baseline_spinbox.setDecimals(1)
+        self.baseline_spinbox.setSuffix(" s")
+        self.baseline_spinbox.setMaximumWidth(100)
         self.baseline_spinbox.valueChanged.connect(self._on_parameter_changed)
         baseline_layout.addWidget(self.baseline_spinbox)
         baseline_group.setLayout(baseline_layout)
@@ -265,10 +271,68 @@ class SecondLevelWidget(QWidget):
         else:
             self.frame_end_edit.setValue(999999)
             
-        self.baseline_spinbox.setValue(10)
+        self.baseline_spinbox.setValue(5.0)
         self.formula_dropdown.setCurrentIndex(1)
         self._updating = False
         self.refresh_plots()
+    
+    def _update_baseline_max(self, nframes):
+        """Cap baseline spinbox maximum to total recording duration in seconds."""
+        exp_data = getattr(self.window, '_exp_data', None)
+        if exp_data is None:
+            return
+
+        total_s = None
+
+        # --- Try timestamps ---
+        time_stamps = None
+        for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
+            if isinstance(exp_data, dict):
+                if attr_name in exp_data:
+                    time_stamps = exp_data[attr_name]
+                    break
+            else:
+                if hasattr(exp_data, attr_name):
+                    time_stamps = getattr(exp_data, attr_name)
+                    break
+
+        if time_stamps is not None and hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
+            try:
+                if isinstance(time_stamps[0], str):
+                    from datetime import datetime
+                    first_dt = datetime.strptime(time_stamps[0], '%Y-%m-%d %H:%M:%S.%f')
+                    last_idx = min(nframes, len(time_stamps)) - 1
+                    last_dt = datetime.strptime(time_stamps[last_idx], '%Y-%m-%d %H:%M:%S.%f')
+                    total_s = (last_dt - first_dt).total_seconds()
+                else:
+                    ts_arr = np.asarray(time_stamps[:min(nframes, len(time_stamps))], dtype=float)
+                    max_t = float(ts_arr[-1]) if len(ts_arr) > 0 else 0
+                    if max_t > 10000:
+                        total_s = max_t / 1000.0
+                    else:
+                        total_s = max_t
+            except Exception:
+                pass
+
+        # --- Fallback: frame_rate ---
+        if total_s is None:
+            frame_rate = None
+            if isinstance(exp_data, dict):
+                frame_rate = exp_data.get('frame_rate', None)
+            else:
+                frame_rate = getattr(exp_data, 'frame_rate', None)
+            if frame_rate is not None and frame_rate != 'NA':
+                try:
+                    fr = float(frame_rate)
+                    if fr > 0:
+                        total_s = nframes / fr
+                except (ValueError, TypeError):
+                    pass
+
+        if total_s is not None and total_s > 0:
+            self.baseline_spinbox.setMaximum(round(total_s, 1))
+        else:
+            self.baseline_spinbox.setMaximum(9999.0)
     
     def _prev_page(self):
         """Go to previous page of plots."""
@@ -328,6 +392,9 @@ class SecondLevelWidget(QWidget):
             self.frame_start_edit.setMaximum(nframes - 1)
             self._updating = False
         
+        # Cap baseline spinbox to total recording duration
+        self._update_baseline_max(nframes)
+        
         # Get frame range and y-limits
         frame_start, frame_end = self._get_frame_range()
         ymin, ymax = self._get_ylim()
@@ -372,15 +439,29 @@ class SecondLevelWidget(QWidget):
         
         # Start worker thread to compute traces
         self.worker_thread = QThread()
+        # Get time_stamps and frame_rate from experiment metadata
+        exp_data = getattr(self.window, '_exp_data', None)
+        time_stamps = None
+        frame_rate = None
+        if exp_data is not None:
+            if isinstance(exp_data, dict):
+                time_stamps = exp_data.get('time_stamps')
+                frame_rate = exp_data.get('frame_rate')
+            else:
+                time_stamps = getattr(exp_data, 'time_stamps', None)
+                frame_rate = getattr(exp_data, 'frame_rate', None)
+        
         self.worker = SecondLevelWorker(
             saved_rois=saved_rois,
             tif=current_tif,
             tif_chan2=current_tif_chan2,
             formula_idx=self.formula_dropdown.currentIndex(),
-            baseline_pct=self.baseline_spinbox.value(),
+            baseline_seconds=self.baseline_spinbox.value(),
             frame_start=frame_start,
             frame_end=frame_end,
-            page_rois_slice=(start_idx, end_idx)
+            page_rois_slice=(start_idx, end_idx),
+            time_stamps=time_stamps,
+            frame_rate=frame_rate
         )
         
         self.worker.moveToThread(self.worker_thread)

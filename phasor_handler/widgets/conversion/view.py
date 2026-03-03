@@ -68,6 +68,13 @@ class ConversionWidget(QWidget):
 		run_btn.setStyleSheet("font-weight: bold;")
 		run_btn.clicked.connect(self.window.run_conversion_script)
 
+		convert_register_btn = QPushButton("Convert + Register All Directories")
+		convert_register_btn.setStyleSheet("font-weight: bold;")
+		convert_register_btn.setToolTip(
+			"Run conversion followed by registration in one step.\n"
+			"Uses registration parameters from the Registration tab.")
+		convert_register_btn.clicked.connect(self.window.run_convert_and_register)
+
 		self.conv_log = QTextEdit()
 		self.conv_log.setReadOnly(True)
 		self.conv_log.setMinimumHeight(150)
@@ -75,7 +82,10 @@ class ConversionWidget(QWidget):
 		self.window.conv_log = self.conv_log
 
 		run_layout.addWidget(self.conv_log)
-		run_layout.addWidget(run_btn)
+		btn_row = QHBoxLayout()
+		btn_row.addWidget(run_btn)
+		btn_row.addWidget(convert_register_btn)
+		run_layout.addLayout(btn_row)
 		run_group.setLayout(run_layout)
 		layout.addWidget(run_group, 1)
 

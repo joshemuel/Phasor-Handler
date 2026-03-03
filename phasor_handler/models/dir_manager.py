@@ -1,5 +1,8 @@
 from PyQt6.QtCore import QObject, pyqtSignal
 from pathlib import Path
+import re
+import os
+import json
 
 
 class DirManager(QObject):
@@ -39,12 +42,53 @@ class DirManager(QObject):
 
     def list(self):
         return list(self._dirs)
-    
-    def get_display_names(self):
+
+    @staticmethod
+    def _extract_capture_timestamp(dir_path):
+        """Extract a capture timestamp from a directory name or its metadata.
+
+        Tries, in order:
+        1.  A large integer segment in the directory name (unix epoch).
+            e.g.  ``C3er20-3-1764913567-5.imgdir``  →  ``1764913567``
+        2.  ``experiment_summary.json`` date/time fields inside the directory.
+        3.  Falls back to ``0`` (preserves insertion order).
+        """
+        name = Path(dir_path).name
+        # Split on hyphens *and* dots, look for a unix-epoch-sized integer
+        parts = re.split(r'[-.]', name)
+        for part in parts:
+            if part.isdigit() and len(part) >= 9:
+                return int(part)
+
+        # Fallback: read metadata
+        summary_path = os.path.join(dir_path, 'experiment_summary.json')
+        if os.path.isfile(summary_path):
+            try:
+                with open(summary_path, 'r', encoding='utf-8') as fh:
+                    meta = json.load(fh)
+                year  = meta.get('year')
+                month = meta.get('month')
+                day   = meta.get('day')
+                hour   = meta.get('hour', 0)
+                minute = meta.get('minute', 0)
+                second = meta.get('second', 0)
+                if all(v not in (None, 'NA') for v in [year, month, day]):
+                    from datetime import datetime
+                    dt = datetime(int(year), int(month), int(day),
+                                  int(hour), int(minute), int(second))
+                    return int(dt.timestamp())
+            except Exception:
+                pass
+        return 0
+
+    def get_display_names(self, sort_by_time=False):
         """Return a list of (full_path, display_name) tuples.
         
         Display names show just the folder stem unless there are duplicates,
         in which case enough parent folders are included to distinguish them.
+
+        If *sort_by_time* is ``True`` the returned list is ordered by capture
+        timestamp (earliest first) instead of insertion order.
         """
         if not self._dirs:
             return []
@@ -96,5 +140,9 @@ class DirManager(QObject):
                     for idx, path in path_list:
                         result[idx] = str(path)
         
-        # Return in original order
-        return [(self._dirs[i], result[i]) for i in range(len(self._dirs))]
+        items = [(self._dirs[i], result[i]) for i in range(len(self._dirs))]
+
+        if sort_by_time:
+            items.sort(key=lambda pair: self._extract_capture_timestamp(pair[0]))
+
+        return items

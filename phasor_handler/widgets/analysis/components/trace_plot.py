@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
     QComboBox, QSizePolicy, QSpinBox, QDoubleSpinBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QLocale
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 
@@ -28,7 +28,7 @@ class TraceplotWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = None  # Will be set by parent
-        self._show_time_in_seconds = False  # Track current display mode
+        self._show_time_in_seconds = True  # Track current display mode
         self._frame_vline = None  # Reference to the current frame line
         self._ylim_user_modified = False  # Track if user has manually changed y-limits
         
@@ -93,17 +93,23 @@ class TraceplotWidget(QWidget):
         # Add spacing between sections
         controls_layout.addSpacing(10)
 
-        # Baseline percentage spinbox
+        # Baseline seconds spinbox
         baseline_layout = QVBoxLayout()
         baseline_layout.setSpacing(0)  # Small spacing between label and spinbox
         baseline_layout.setContentsMargins(0, 0, 0, 0)
-        baseline_label = QLabel("Baseline %:")
+        baseline_label = QLabel("Baseline (s):")
         baseline_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
         baseline_layout.addWidget(baseline_label)
-        self.base_spinbox = QSpinBox()
-        self.base_spinbox.setRange(1, 99)
-        self.base_spinbox.setValue(10)
-        self.base_spinbox.setFixedWidth(60)
+        self.base_spinbox = QDoubleSpinBox()
+        c_locale = QLocale(QLocale.Language.C)
+        c_locale.setNumberOptions(QLocale.NumberOption.RejectGroupSeparator)
+        self.base_spinbox.setLocale(c_locale)
+        self.base_spinbox.setRange(0.1, 9999.0)
+        self.base_spinbox.setValue(5.0)
+        self.base_spinbox.setSingleStep(0.5)
+        self.base_spinbox.setDecimals(1)
+        self.base_spinbox.setSuffix(" s")
+        self.base_spinbox.setFixedWidth(80)
         self.base_spinbox.setFixedHeight(25)
         self.base_spinbox.valueChanged.connect(self._update_trace_from_roi)
         baseline_layout.addWidget(self.base_spinbox)
@@ -127,11 +133,11 @@ class TraceplotWidget(QWidget):
         controls_layout.addSpacing(15)
 
         # Time display toggle button
-        self.time_display_button = QPushButton("Frames")
+        self.time_display_button = QPushButton("Seconds")
         self.time_display_button.setFixedWidth(100)
         self.time_display_button.setFixedHeight(20)
         self.time_display_button.setCheckable(True)
-        self.time_display_button.setChecked(False)  # Default to frames
+        self.time_display_button.setChecked(True)  # Default to seconds
         self.time_display_button.setStyleSheet("QPushButton { font-size: 8pt; }")
         self.time_display_button.setToolTip("Toggle between frame numbers and time in seconds")
         self.time_display_button.clicked.connect(self._toggle_time_display)
@@ -284,20 +290,21 @@ class TraceplotWidget(QWidget):
                 else:
                     sig2 = np.zeros((ch2.shape[0],), dtype=np.float32)
 
-        # Compute Fo (baseline) as mean over first 10% of frames of sig1
+        # Compute Fo (baseline) as mean over first N seconds of frames of sig1
         nframes = sig1.shape[0]
         if nframes <= 0:
             return
-        # Determine baseline fraction from base_spinbox (percent).
+        # Cap baseline spinbox to total recording duration
+        self.update_baseline_max()
+        # Determine baseline frame count from base_spinbox (seconds).
         try:
-            pct = int(self.base_spinbox.value()) if hasattr(self, 'base_spinbox') else 10
-            # Clamp between 1 and 99
-            pct = max(1, min(99, pct))
-            frac = float(pct) / 100.0
+            baseline_seconds = float(self.base_spinbox.value()) if hasattr(self, 'base_spinbox') else 5.0
+            baseline_seconds = max(0.1, baseline_seconds)
+            baseline_count = self._seconds_to_frame_count(baseline_seconds, nframes)
         except Exception:
-            frac = 0.10
+            baseline_count = max(1, nframes // 10)
 
-        baseline_count = max(1, int(np.ceil(nframes * frac)))
+        baseline_count = max(1, min(baseline_count, nframes))
         Fog = float(np.mean(sig1[:baseline_count]))
 
         self.trace_ax.cla()
@@ -797,7 +804,156 @@ class TraceplotWidget(QWidget):
         
         # Update the trace plot with new x-axis
         self._update_trace_from_roi()
-        
+
+    def _seconds_to_frame_count(self, seconds, nframes):
+        """Convert a duration in seconds to a number of frames using metadata.
+
+        Tries to use timestamps from experiment data; falls back to frame_rate,
+        and finally to a simple 10 % heuristic if nothing is available.
+
+        Args:
+            seconds: baseline duration in seconds
+            nframes: total number of frames in the recording
+
+        Returns:
+            int: number of frames that cover the requested duration
+        """
+        ed = getattr(self.main_window, '_exp_data', None) if self.main_window else None
+        if ed is None:
+            # No metadata – fall back to 10 % of frames
+            return max(1, nframes // 10)
+
+        # --- Try timestamps first ---
+        time_stamps = None
+        for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
+            if isinstance(ed, dict):
+                if attr_name in ed:
+                    time_stamps = ed[attr_name]
+                    break
+            else:
+                if hasattr(ed, attr_name):
+                    time_stamps = getattr(ed, attr_name)
+                    break
+
+        if time_stamps is not None and hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
+            try:
+                if isinstance(time_stamps[0], str):
+                    # Parse datetime strings
+                    from datetime import datetime
+                    first_dt = datetime.strptime(time_stamps[0], '%Y-%m-%d %H:%M:%S.%f')
+                    for idx in range(min(nframes, len(time_stamps))):
+                        dt = datetime.strptime(time_stamps[idx], '%Y-%m-%d %H:%M:%S.%f')
+                        elapsed = (dt - first_dt).total_seconds()
+                        if elapsed >= seconds:
+                            return max(1, idx)
+                    return min(nframes, len(time_stamps))
+                else:
+                    # Numeric timestamps – detect ms vs s
+                    import numpy as _np
+                    ts_arr = _np.asarray(time_stamps[:min(nframes, len(time_stamps))], dtype=float)
+                    max_t = float(ts_arr[-1]) if len(ts_arr) > 0 else 0
+                    if max_t > 10000:
+                        # milliseconds
+                        target_ms = seconds * 1000.0
+                        indices = _np.where(ts_arr >= target_ms)[0]
+                    else:
+                        indices = _np.where(ts_arr >= seconds)[0]
+                    if len(indices) > 0:
+                        return max(1, int(indices[0]))
+                    return min(nframes, len(ts_arr))
+            except Exception:
+                pass
+
+        # --- Fallback: frame_rate ---
+        frame_rate = None
+        if isinstance(ed, dict):
+            frame_rate = ed.get('frame_rate', None)
+        else:
+            frame_rate = getattr(ed, 'frame_rate', None)
+
+        if frame_rate is not None and frame_rate != 'NA':
+            try:
+                fr = float(frame_rate)
+                if fr > 0:
+                    return max(1, int(np.ceil(fr * seconds)))
+            except (ValueError, TypeError):
+                pass
+
+        # --- Last resort: 10 % ---
+        return max(1, nframes // 10)
+
+    def _get_total_recording_seconds(self, nframes):
+        """Estimate total recording duration in seconds from metadata.
+
+        Uses timestamps or frame_rate from experiment data.
+        Returns None if the duration cannot be determined.
+        """
+        ed = getattr(self.main_window, '_exp_data', None) if self.main_window else None
+        if ed is None:
+            return None
+
+        # --- Try timestamps ---
+        time_stamps = None
+        for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
+            if isinstance(ed, dict):
+                if attr_name in ed:
+                    time_stamps = ed[attr_name]
+                    break
+            else:
+                if hasattr(ed, attr_name):
+                    time_stamps = getattr(ed, attr_name)
+                    break
+
+        if time_stamps is not None and hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
+            try:
+                if isinstance(time_stamps[0], str):
+                    from datetime import datetime
+                    first_dt = datetime.strptime(time_stamps[0], '%Y-%m-%d %H:%M:%S.%f')
+                    last_idx = min(nframes, len(time_stamps)) - 1
+                    last_dt = datetime.strptime(time_stamps[last_idx], '%Y-%m-%d %H:%M:%S.%f')
+                    return (last_dt - first_dt).total_seconds()
+                else:
+                    import numpy as _np
+                    ts_arr = _np.asarray(time_stamps[:min(nframes, len(time_stamps))], dtype=float)
+                    max_t = float(ts_arr[-1]) if len(ts_arr) > 0 else 0
+                    if max_t > 10000:
+                        return max_t / 1000.0  # ms -> s
+                    else:
+                        return max_t
+            except Exception:
+                pass
+
+        # --- Fallback: frame_rate ---
+        frame_rate = None
+        if isinstance(ed, dict):
+            frame_rate = ed.get('frame_rate', None)
+        else:
+            frame_rate = getattr(ed, 'frame_rate', None)
+
+        if frame_rate is not None and frame_rate != 'NA':
+            try:
+                fr = float(frame_rate)
+                if fr > 0:
+                    return nframes / fr
+            except (ValueError, TypeError):
+                pass
+
+        return None
+
+    def update_baseline_max(self):
+        """Update baseline spinbox maximum based on total recording time."""
+        if self.main_window is None:
+            return
+        current_tif = getattr(self.main_window, '_current_tif', None)
+        if current_tif is None:
+            return
+        nframes = current_tif.shape[0] if current_tif.ndim == 3 else 1
+        total_s = self._get_total_recording_seconds(nframes)
+        if total_s is not None and total_s > 0:
+            self.base_spinbox.setMaximum(round(total_s, 1))
+        else:
+            self.base_spinbox.setMaximum(9999.0)
+
     def clear_trace(self):
         """Clear the trace plot and reset it to initial state."""
         if hasattr(self, 'trace_ax') and self.trace_ax is not None:

@@ -81,9 +81,10 @@ class AnalysisWidget(QWidget):
         reg_button_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         self.analysis_list_widget.setMinimumWidth(220)
-        # Populate using the dir_manager's display names
+        # Populate using the dir_manager's display names (sorted by capture time)
         from PyQt6.QtWidgets import QListWidgetItem
-        for full_path, display_name in getattr(self.window.dir_manager, 'get_display_names', lambda: [])():
+        _get_names = getattr(self.window.dir_manager, 'get_display_names', None)
+        for full_path, display_name in (_get_names(sort_by_time=True) if _get_names else []):
             item = QListWidgetItem(display_name)
             item.setToolTip(full_path)
             item.setData(Qt.ItemDataRole.UserRole, full_path)

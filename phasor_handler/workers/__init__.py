@@ -2,3 +2,4 @@ from .registration_worker import RegistrationWorker
 from .histogram_worker import HistogramWorker
 from .conversion_worker import ConversionWorker
 from .secondlevel_worker import SecondLevelWorker
+from .convert_register_worker import ConvertRegisterWorker

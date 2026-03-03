@@ -466,7 +466,13 @@ class RoiListWidget(QWidget):
         
         try:
             with open(filename, 'r') as f:
-                loaded_rois = json.load(f)
+                loaded_data = json.load(f)
+            
+            # Support both formats: list (legacy) and dict with _capture_name + rois
+            if isinstance(loaded_data, dict):
+                loaded_rois = loaded_data.get('rois', [])
+            else:
+                loaded_rois = loaded_data
             
             # Clear existing ROIs
             if not hasattr(self.main_window, '_saved_rois'):
@@ -544,20 +550,33 @@ class RoiListWidget(QWidget):
         filename = file_dialog.selectedFiles()[0]
         
         try:
-            # Prepare data for JSON serialization
-            roi_data = []
+            # Get the capture/directory name for reference
+            capture_name = None
+            if hasattr(self.main_window, '_get_current_directory_path'):
+                dir_path = self.main_window._get_current_directory_path()
+                if dir_path:
+                    capture_name = os.path.basename(dir_path)
+            
+            # Prepare ROI list for JSON serialization
+            roi_list = []
             for roi in self.main_window._saved_rois:
                 roi_copy = roi.copy()
                 # Ensure xyxy is a list for JSON serialization
                 if 'xyxy' in roi_copy:
                     roi_copy['xyxy'] = list(roi_copy['xyxy'])
-                roi_data.append(roi_copy)
+                roi_list.append(roi_copy)
+            
+            # Wrap in object with capture name as top-level metadata
+            output = {}
+            if capture_name:
+                output['_capture_name'] = capture_name
+            output['rois'] = roi_list
             
             with open(filename, 'w') as f:
-                json.dump(roi_data, f, indent=2)
+                json.dump(output, f, indent=2)
             
             QMessageBox.information(self, "Save Complete", 
-                                  f"Successfully saved {len(roi_data)} ROIs to:\n{filename}")
+                                  f"Successfully saved {len(roi_list)} ROIs to:\n{filename}")
                                   
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save ROIs:\n{str(e)}")
