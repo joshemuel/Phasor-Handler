@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 from PyQt6.QtCore import QObject, pyqtSignal
+from phasor_handler.tools.misc import detect_source_type
 
 
 class ConversionWorker(QObject):
@@ -34,15 +35,11 @@ class ConversionWorker(QObject):
                 self.log.emit(f"Processing ({i+1}/{len(self.dirs)}): {conv_dir}")
                 
                 # Detect source type based on file pattern
-                if any(fname.endswith("000.npy") for fname in os.listdir(conv_dir)):
-                    source_type = "i3"
-                    self.log.emit("Detected i3 source based on file pattern.")
-                elif "CellVideo1" in os.listdir(conv_dir):
-                    source_type = "mini"
-                    self.log.emit("Detected mini source based on file pattern.")
-                else:
+                source_type = detect_source_type(conv_dir)
+                if source_type is None:
                     self.log.emit(f"Can't detect file type for {conv_dir}")
                     continue
+                self.log.emit(f"Detected {source_type} source based on file pattern.")
                 
                 # 1. Run convert.py
                 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))

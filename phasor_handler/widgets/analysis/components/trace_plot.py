@@ -391,101 +391,20 @@ class TraceplotWidget(QWidget):
         x_values = None
         x_label = "Frame"
         current_x_pos = current_frame
-        
+        resolved = None
+
         if show_time:
-            # Try to get time stamps from experiment data
-            try:
-                ed = getattr(self.main_window, '_exp_data', None)
-                time_stamps = None
-                
-                if ed is not None:
-                    # Try different possible attribute names for time stamps
-                    # Handle both dictionary and object metadata formats
-                    for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                        if isinstance(ed, dict):
-                            if attr_name in ed:
-                                time_stamps = ed[attr_name]
-                                print(f"DEBUG: Found time stamps in dict key '{attr_name}', length: {len(time_stamps) if hasattr(time_stamps, '__len__') else 'unknown'}")
-                                if hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
-                                    print(f"DEBUG: First few time stamps: {time_stamps[:min(5, len(time_stamps))]}")
-                                break
-                        else:
-                            if hasattr(ed, attr_name):
-                                time_stamps = getattr(ed, attr_name)
-                                print(f"DEBUG: Found time stamps in attribute '{attr_name}', length: {len(time_stamps) if hasattr(time_stamps, '__len__') else 'unknown'}")
-                                if hasattr(time_stamps, '__len__') and len(time_stamps) > 0:
-                                    print(f"DEBUG: First few time stamps: {time_stamps[:min(5, len(time_stamps))]}")
-                                break
-                
-                # Check if we have valid time stamps (not empty and has enough data)
-                has_valid_timestamps = (time_stamps is not None and 
-                                       hasattr(time_stamps, '__len__') and 
-                                       len(time_stamps) > 0 and
-                                       len(time_stamps) >= len(metric))
-                
-                if has_valid_timestamps:
-                    # Parse time stamps - they could be numbers (ms or seconds) or datetime strings
-                    time_array = np.array(time_stamps[:len(metric)])
-                    
-                    # Check if timestamps are strings (datetime format) or numbers
-                    if isinstance(time_stamps[0], str):
-                        # Parse datetime strings and convert to relative seconds
-                        from datetime import datetime
-                        try:
-                            # Parse the datetime strings
-                            dt_objects = []
-                            for ts in time_stamps[:len(metric)]:
-                                # Handle format like '2025-10-26 19:08:38.626'
-                                dt = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f')
-                                dt_objects.append(dt)
-                            
-                            # Convert to seconds relative to first timestamp
-                            first_dt = dt_objects[0]
-                            x_values = np.array([(dt - first_dt).total_seconds() for dt in dt_objects])
-                            print(f"DEBUG: Parsed datetime timestamps, duration: {x_values[-1]:.2f}s")
-                        except Exception as e:
-                            print(f"DEBUG: Error parsing datetime strings: {e}")
-                            # Fall back to frame numbers
-                            show_time = False
-                            x_values = None
-                    else:
-                        # Numeric timestamps - detect if milliseconds or seconds
-                        max_time = np.max(time_array) if len(time_array) > 0 else 0
-                        
-                        # Heuristic: if max time > 10000, assume milliseconds; otherwise seconds
-                        if max_time > 10000:
-                            # Data is in milliseconds, convert to seconds
-                            x_values = time_array / 1000.0
-                            print(f"DEBUG: Time stamps appear to be in milliseconds (max={max_time:.2f}), converting to seconds")
-                        else:
-                            # Data is already in seconds (or very short recording in ms)
-                            x_values = time_array
-                            print(f"DEBUG: Time stamps appear to be in seconds (max={max_time:.2f})")
-                    
-                    if x_values is not None:
-                        x_label = "Time (s)"
-                        
-                        # Convert current frame position to time
-                        if current_frame < len(x_values):
-                            current_x_pos = x_values[current_frame]
-                        else:
-                            current_x_pos = x_values[-1] if len(x_values) > 0 else current_frame
-                        
-                        print(f"DEBUG: Using time stamps for x-axis, current position: {current_x_pos}s")
+            from phasor_handler.tools.misc import resolve_timestamps
+            ed = getattr(self.main_window, '_exp_data', None)
+            resolved = resolve_timestamps(ed, len(metric))
+            if resolved is not None:
+                x_values = np.array(resolved[:len(metric)])
+                x_label = "Time (s)"
+                if current_frame < len(x_values):
+                    current_x_pos = x_values[current_frame]
                 else:
-                    # Fallback: estimate time based on frame rate (if available)
-                    frame_rate = getattr(ed, 'frame_rate', None) if ed else None
-                    if frame_rate and frame_rate > 0:
-                        x_values = np.arange(len(metric)) / frame_rate
-                        x_label = "Time (s)"
-                        current_x_pos = current_frame / frame_rate
-                        print(f"DEBUG: Using estimated time from frame rate {frame_rate} Hz, current position: {current_x_pos}s")
-                    else:
-                        # No time data available, fall back to frames
-                        show_time = False
-                        print("DEBUG: No time stamp data or frame rate found, showing frames instead")
-            except Exception as e:
-                print(f"DEBUG: Error getting time stamps: {e}")
+                    current_x_pos = x_values[-1] if len(x_values) > 0 else current_frame
+            else:
                 show_time = False
 
         # Plot metric with appropriate x-axis
@@ -517,43 +436,15 @@ class TraceplotWidget(QWidget):
                 print(f"DEBUG: Found {len(stims)} stimulation timeframes: {stims}")
 
             # Convert stimulation timeframes to appropriate x-axis units
-            if show_time and x_values is not None and time_stamps is not None:
-                # Handle both datetime strings and numeric timestamps
-                if isinstance(time_stamps[0], str):
-                    # Parse datetime strings for stimulation times
-                    from datetime import datetime
-                    try:
-                        first_dt = datetime.strptime(time_stamps[0], '%Y-%m-%d %H:%M:%S.%f')
-                        for stim in stims:
-                            stim_frame = int(stim)
-                            if stim_frame < len(time_stamps):
-                                stim_dt = datetime.strptime(time_stamps[stim_frame], '%Y-%m-%d %H:%M:%S.%f')
-                                stim_x_pos = (stim_dt - first_dt).total_seconds()
-                                print(f"DEBUG: Adding stimulation vline at time {stim_x_pos:.2f}s (frame {stim_frame})")
-                                self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
-                    except Exception as e:
-                        print(f"DEBUG: Error parsing datetime for stimulation: {e}")
-                else:
-                    # Numeric timestamps - detect format
-                    time_array = np.array(time_stamps)
-                    max_time = np.max(time_array) if len(time_array) > 0 else 0
-                    is_milliseconds = max_time > 10000
-                    
-                    # Convert stim frames to time positions
-                    for stim in stims:
-                        stim_frame = int(stim)
-                        if stim_frame < len(time_stamps):
-                            if is_milliseconds:
-                                stim_x_pos = time_stamps[stim_frame] / 1000.0
-                            else:
-                                stim_x_pos = time_stamps[stim_frame]
-                            print(f"DEBUG: Adding stimulation vline at time {stim_x_pos:.2f}s (frame {stim_frame})")
-                            self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
-            else:
-                # Use frame numbers
+            if show_time and x_values is not None and resolved is not None:
                 for stim in stims:
                     stim_frame = int(stim)
-                    print(f"DEBUG: Adding stimulation vline at frame {stim_frame}")
+                    if stim_frame < len(resolved):
+                        stim_x_pos = resolved[stim_frame]
+                        self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
+            else:
+                for stim in stims:
+                    stim_frame = int(stim)
                     self.trace_ax.axvline(stim_frame, color='red', linestyle='--', zorder=15, linewidth=2)
         except Exception as e:
             # keep plotting even if stim drawing fails

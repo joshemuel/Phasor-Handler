@@ -1864,79 +1864,33 @@ class AnalysisWidget(QWidget):
         current_x_pos = current_frame
         
         if show_time:
-            try:
-                ed = getattr(self.window, '_exp_data', None)
-                time_stamps = None
-                
-                if ed is not None:
-                    # Try different possible attribute names for time stamps
-                    # Handle both dictionary and object metadata formats
-                    for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                        if isinstance(ed, dict):
-                            if attr_name in ed:
-                                time_stamps = ed[attr_name]
-                                break
-                        else:
-                            if hasattr(ed, attr_name):
-                                time_stamps = getattr(ed, attr_name)
-                                break
-                
-                if time_stamps is not None and current_frame < len(time_stamps):
-                    current_x_pos = time_stamps[current_frame] / 1000.0
-                elif ed is not None:
-                    # Fallback: estimate time based on frame rate
-                    if isinstance(ed, dict):
-                        frame_rate = ed.get('frame_rate', None)
-                    else:
-                        frame_rate = getattr(ed, 'frame_rate', None)
-                    if frame_rate and frame_rate > 0:
-                        current_x_pos = current_frame / frame_rate
-            except Exception:
-                pass
+            from phasor_handler.tools.misc import resolve_timestamps
+            tif = getattr(self.window, '_current_tif', None)
+            nframes_hint = tif.shape[0] if tif is not None and tif.ndim >= 3 else 1
+            resolved = resolve_timestamps(
+                getattr(self.window, '_exp_data', None), nframes_hint
+            )
+            if resolved is not None and current_frame < len(resolved):
+                current_x_pos = resolved[current_frame]
 
         # If there's no existing metric plotted, set sensible x-limits so a
         # standalone vline will be visible (use number of frames when available).
         if not self.trace_ax.lines:
             try:
                 nframes = self.window._current_tif.shape[0] if getattr(self.window, '_current_tif', None) is not None and getattr(self.window, '_current_tif', None).ndim >= 3 else 1
-                
-                # Set x-limits based on display mode
+
                 if show_time:
-                    # Try to get max time value
-                    try:
-                        ed = getattr(self.window, '_exp_data', None)
-                        time_stamps = None
-                        
-                        if ed is not None:
-                            # Handle both dictionary and object metadata formats
-                            for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
-                                if isinstance(ed, dict):
-                                    if attr_name in ed:
-                                        time_stamps = ed[attr_name]
-                                        break
-                                else:
-                                    if hasattr(ed, attr_name):
-                                        time_stamps = getattr(ed, attr_name)
-                                        break
-                        
-                        if time_stamps is not None and len(time_stamps) > 0:
-                            xmax = max(np.array(time_stamps[:min(nframes, len(time_stamps))]) / 1000.0)
-                        elif ed is not None:
-                            if isinstance(ed, dict):
-                                frame_rate = ed.get('frame_rate', None)
-                            else:
-                                frame_rate = getattr(ed, 'frame_rate', None)
-                            if frame_rate and frame_rate > 0:
-                                xmax = (nframes - 1) / frame_rate
-                            else:
-                                xmax = max(1, nframes - 1)
-                        else:
-                            xmax = max(1, nframes - 1)
-                    except Exception:
+                    from phasor_handler.tools.misc import resolve_timestamps
+                    resolved = resolve_timestamps(
+                        getattr(self.window, '_exp_data', None), nframes
+                    )
+                    if resolved is not None and len(resolved) > 0:
+                        xmax = resolved[-1]
+                    else:
                         xmax = max(1, nframes - 1)
                 else:
                     xmax = max(1, nframes - 1)
-                    
+
                 self.trace_ax.set_xlim(0, xmax)
             except Exception:
                 pass

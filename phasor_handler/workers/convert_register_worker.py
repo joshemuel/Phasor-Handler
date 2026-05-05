@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 from PyQt6.QtCore import QObject, pyqtSignal
+from phasor_handler.tools.misc import detect_source_type
 
 
 class ConvertRegisterWorker(QObject):
@@ -48,21 +49,11 @@ class ConvertRegisterWorker(QObject):
                 self.log.emit("--- Phase 1: Conversion ---")
 
                 # Detect source type
-                try:
-                    dir_contents = os.listdir(conv_dir)
-                except OSError as e:
-                    self.log.emit(f"Cannot read directory {conv_dir}: {e}")
-                    continue
-
-                if any(fname.endswith("000.npy") for fname in dir_contents):
-                    source_type = "i3"
-                    self.log.emit("Detected i3 source based on file pattern.")
-                elif "CellVideo1" in dir_contents:
-                    source_type = "mini"
-                    self.log.emit("Detected mini source based on file pattern.")
-                else:
+                source_type = detect_source_type(conv_dir)
+                if source_type is None:
                     self.log.emit(f"Can't detect file type for {conv_dir} — skipping.")
                     continue
+                self.log.emit(f"Detected {source_type} source based on file pattern.")
 
                 # 1a. Run convert.py
                 convert_script = os.path.join(project_root, 'scripts', 'convert.py')

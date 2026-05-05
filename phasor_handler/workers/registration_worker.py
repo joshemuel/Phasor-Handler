@@ -4,6 +4,7 @@ import glob
 import shutil
 import subprocess
 from PyQt6.QtCore import QObject, pyqtSignal
+from phasor_handler.tools.misc import detect_source_type
 
 
 class RegistrationWorker(QObject):
@@ -72,6 +73,39 @@ class RegistrationWorker(QObject):
                 except Exception as e:
                     self.log.emit(f"FAILED: {reg_dir} (Error: {e})\n")
                     continue
+
+                # Generate metadata if it doesn't exist yet
+                exp_pkl = os.path.join(reg_dir, "experiment_summary.pkl")
+                if not os.path.isfile(exp_pkl):
+                    source_type = detect_source_type(reg_dir)
+                    if source_type is not None:
+                        meta_script = os.path.join(project_root, 'scripts', 'meta_reader.py')
+                        if os.path.exists(meta_script):
+                            meta_cmd = [sys.executable, meta_script, "-s", source_type, str(reg_dir)]
+                            self.log.emit(f"[meta_reader] Generating metadata for: {reg_dir}")
+                            try:
+                                creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                                meta_proc = subprocess.Popen(
+                                    meta_cmd,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT,
+                                    text=True,
+                                    creationflags=creationflags,
+                                    cwd=project_root
+                                )
+                                for line in meta_proc.stdout:
+                                    self.log.emit(line.rstrip())
+                                meta_retcode = meta_proc.wait()
+                                if meta_retcode != 0:
+                                    self.log.emit(f"WARNING: Metadata extraction failed for: {reg_dir}")
+                                else:
+                                    self.log.emit("--- Metadata generation done ---")
+                            except Exception as e:
+                                self.log.emit(f"WARNING: Metadata extraction error: {e}")
+                        else:
+                            self.log.emit(f"WARNING: meta_reader.py not found at {meta_script}")
+                    else:
+                        self.log.emit(f"WARNING: Cannot detect source type for {reg_dir}, skipping metadata generation")
 
                 if self.combine:
                     # Determine which channels to concatenate based on user's nchannels parameter

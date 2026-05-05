@@ -166,6 +166,41 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'second_level_widget'):
                 self.second_level_widget.refresh_plots()
 
+    def _refresh_analysis_metadata(self):
+        """Reload experiment metadata for the currently selected Analysis directory.
+
+        Called after worker completion to pick up newly-created metadata files
+        without requiring the user to re-select the directory.
+        """
+        if not hasattr(self, '_get_current_directory_path'):
+            return
+        dir_path = self._get_current_directory_path()
+        if not dir_path:
+            return
+
+        import pickle
+        import json
+
+        exp_pkl = os.path.join(dir_path, "experiment_summary.pkl")
+        exp_json = os.path.join(dir_path, "experiment_summary.json")
+
+        metadata = None
+        if os.path.isfile(exp_pkl):
+            try:
+                with open(exp_pkl, 'rb') as f:
+                    metadata = pickle.load(f)
+            except Exception:
+                pass
+        if metadata is None and os.path.isfile(exp_json):
+            try:
+                with open(exp_json, 'r') as f:
+                    metadata = json.load(f)
+            except Exception:
+                pass
+
+        if metadata is not None:
+            self._exp_data = metadata
+
     def run_conversion_script(self):
         if not self.selected_dirs:
             QMessageBox.warning(self, "No Directories", "Please add at least one directory to the list before running.")
@@ -201,11 +236,12 @@ class MainWindow(QMainWindow):
             self._conv_worker.deleteLater()
             del self._conv_worker
             del self._conv_thread
-        
+            self._refresh_analysis_metadata()
+
         def _on_error(err_msg):
             self.conv_log.append(f"[ERROR] {err_msg}")
             QMessageBox.critical(self, "Conversion Error", f"An error occurred:\n{err_msg}")
-        
+
         self._conv_worker.finished.connect(_on_finished)
         self._conv_worker.error.connect(_on_error)
         
@@ -260,6 +296,7 @@ class MainWindow(QMainWindow):
             self._reg_worker.deleteLater()
             del self._reg_worker
             del self._reg_thread
+            self._refresh_analysis_metadata()
 
         self._reg_worker.finished.connect(_on_finished)
         self._reg_worker.error.connect(lambda e: self.reg_log.append(f"ERROR: {e}"))
@@ -322,6 +359,7 @@ class MainWindow(QMainWindow):
             self._cr_worker.deleteLater()
             del self._cr_worker
             del self._cr_thread
+            self._refresh_analysis_metadata()
 
         def _on_error(err_msg):
             self.conv_log.append(f"[ERROR] {err_msg}")

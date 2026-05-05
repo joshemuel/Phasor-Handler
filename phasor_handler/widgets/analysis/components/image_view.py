@@ -13,7 +13,9 @@ import numpy as np
 import os
 import pickle
 import subprocess
+import sys
 import tifffile
+from phasor_handler.tools.misc import detect_source_type
 
 
 class ImageViewWidget(QWidget):
@@ -653,28 +655,53 @@ class ImageViewWidget(QWidget):
             except Exception as e:
                 print(f"DEBUG: Failed to load JSON metadata: {e}")
         
-        # If still no metadata, try to read from raw files
+        # If still no metadata, try to generate from raw source files
         if metadata is None:
             try:
                 print(f"DEBUG: Attempting to read metadata from raw files in {directory_path}")
-                result = subprocess.run([
-                    'python', 'scripts/meta_reader.py', '-f', directory_path
-                ], capture_output=True, text=True, timeout=30)
-                
-                if result.returncode == 0:
-                    print("DEBUG: meta_reader.py executed successfully")
-                    # Try loading the newly created files
-                    if os.path.isfile(exp_details):
-                        with open(exp_details, 'rb') as f:
-                            metadata = pickle.load(f)
-                        print("DEBUG: Successfully loaded newly created metadata")
-                    elif os.path.isfile(exp_json):
-                        import json
-                        with open(exp_json, 'r') as f:
-                            metadata = json.load(f)
-                        print("DEBUG: Successfully loaded newly created JSON metadata")
+
+                source_type = detect_source_type(directory_path)
+
+                if source_type is None:
+                    print(f"DEBUG: Cannot detect source type for {directory_path}, skipping metadata generation")
                 else:
-                    print(f"DEBUG: meta_reader.py failed: {result.stderr}")
+                    project_root = os.path.abspath(
+                        os.path.join(os.path.dirname(__file__), '..', '..', '..')
+                    )
+                    meta_script = os.path.join(project_root, 'scripts', 'meta_reader.py')
+
+                    if not os.path.exists(meta_script):
+                        print(f"DEBUG: meta_reader.py not found at {meta_script}")
+                    else:
+                        cmd = [sys.executable, meta_script, '-s', source_type, directory_path]
+                        print(f"DEBUG: Running metadata extraction: {' '.join(cmd)}")
+
+                        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+
+                        result = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=60,
+                            cwd=project_root,
+                            creationflags=creationflags
+                        )
+
+                        if result.returncode == 0:
+                            print("DEBUG: meta_reader.py executed successfully")
+                            if os.path.isfile(exp_details):
+                                with open(exp_details, 'rb') as f:
+                                    metadata = pickle.load(f)
+                                print("DEBUG: Successfully loaded newly created metadata")
+                            elif os.path.isfile(exp_json):
+                                import json
+                                with open(exp_json, 'r') as f:
+                                    metadata = json.load(f)
+                                print("DEBUG: Successfully loaded newly created JSON metadata")
+                        else:
+                            print(f"DEBUG: meta_reader.py failed (exit {result.returncode}): {result.stderr}")
+            except subprocess.TimeoutExpired:
+                print(f"DEBUG: meta_reader.py timed out for {directory_path}")
             except Exception as e:
                 print(f"DEBUG: Failed to run meta_reader.py: {e}")
         

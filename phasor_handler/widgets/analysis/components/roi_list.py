@@ -12,13 +12,15 @@ This component handles all ROI list management including:
 
 import json
 import os
+import pickle
 import random
 import numpy as np
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QGroupBox, QListWidget, QPushButton, 
+    QWidget, QVBoxLayout, QGroupBox, QListWidget, QPushButton,
     QGridLayout, QFileDialog, QMessageBox, QProgressDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF
+from phasor_handler.tools.misc import resolve_timestamps
 
 
 class RoiListWidget(QWidget):
@@ -636,6 +638,27 @@ class RoiListWidget(QWidget):
                 if tif_chan2 is not None:
                     tif_chan2 = tif_chan2[None, ...]
             
+            # Reload metadata from disk if it's missing (may have been created by a worker)
+            if not getattr(self.main_window, '_exp_data', None):
+                dir_path = None
+                if hasattr(self.main_window, '_get_current_directory_path'):
+                    dir_path = self.main_window._get_current_directory_path()
+                if dir_path:
+                    exp_pkl = os.path.join(dir_path, "experiment_summary.pkl")
+                    exp_json_path = os.path.join(dir_path, "experiment_summary.json")
+                    if os.path.isfile(exp_pkl):
+                        try:
+                            with open(exp_pkl, 'rb') as f:
+                                self.main_window._exp_data = pickle.load(f)
+                        except Exception:
+                            pass
+                    if not self.main_window._exp_data and os.path.isfile(exp_json_path):
+                        try:
+                            with open(exp_json_path, 'r') as f:
+                                self.main_window._exp_data = json.load(f)
+                        except Exception:
+                            pass
+
             # Get current formula selection
             formula_index = getattr(self.main_window, 'formula_dropdown', None)
             if formula_index is not None:
@@ -753,9 +776,14 @@ class RoiListWidget(QWidget):
                 else:
                     roi_baselines[i] = 0
             
+            # Resolve timestamps once for all frames
+            _resolved_timestamps = resolve_timestamps(
+                getattr(self.main_window, '_exp_data', None), nframes
+            )
+
             # Extract data for all frames and all ROIs
             export_data = []
-            
+
             for frame_idx in range(nframes):
                 if progress is not None:
                     if progress.wasCanceled():
@@ -768,22 +796,8 @@ class RoiListWidget(QWidget):
                 
                 # Get time information
                 time_s = 0.0
-                if hasattr(self.main_window, '_exp_data') and self.main_window._exp_data:
-                    try:
-                        ed = self.main_window._exp_data
-                        timestamps = None
-                        
-                        # Handle both dictionary and object metadata formats
-                        if isinstance(ed, dict):
-                            timestamps = ed.get('time_stamps', [])
-                        else:
-                            if hasattr(ed, 'time_stamps'):
-                                timestamps = getattr(ed, 'time_stamps', [])
-                        
-                        if timestamps and frame_idx < len(timestamps):
-                            time_s = float(timestamps[frame_idx]) / 1000.0  # Convert ms to seconds
-                    except Exception:
-                        pass
+                if _resolved_timestamps is not None and frame_idx < len(_resolved_timestamps):
+                    time_s = _resolved_timestamps[frame_idx]
                 
                 # Start row with frame number (0-indexed) and time
                 row_data = [str(frame_idx), f"{time_s:.6f}"]
