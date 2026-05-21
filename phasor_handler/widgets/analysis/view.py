@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .components import ImageViewWidget, TraceplotWidget, CircleRoiTool, RoiListWidget, MetadataViewer, BnCWidget
+from ...tools.lazy_stack import stack_projection
 
 
 
@@ -875,9 +876,9 @@ class AnalysisWidget(QWidget):
             self._zproj_max = False
             self._zproj_mean = False
 
-            img = np.std(tif, axis=0)
+            img = stack_projection(tif, "std")
             if tif_chan2 is not None:
-                img_chan2 = np.std(tif_chan2, axis=0)
+                img_chan2 = stack_projection(tif_chan2, "std")
             else:
                 img_chan2 = None
             self.tif_slider.setEnabled(False)
@@ -887,9 +888,9 @@ class AnalysisWidget(QWidget):
             self._zproj_std = False
             self._zproj_mean = False
 
-            img = np.max(tif, axis=0)
+            img = stack_projection(tif, "max")
             if tif_chan2 is not None:
-                img_chan2 = np.max(tif_chan2, axis=0)
+                img_chan2 = stack_projection(tif_chan2, "max")
             else:
                 img_chan2 = None
             self.tif_slider.setEnabled(False)
@@ -899,9 +900,9 @@ class AnalysisWidget(QWidget):
             self._zproj_std = False
             self._zproj_max = False
 
-            img = np.mean(tif, axis=0)
+            img = stack_projection(tif, "mean")
             if tif_chan2 is not None:
-                img_chan2 = np.mean(tif_chan2, axis=0)
+                img_chan2 = stack_projection(tif_chan2, "mean")
             else:
                 img_chan2 = None
             self.tif_slider.setEnabled(False)

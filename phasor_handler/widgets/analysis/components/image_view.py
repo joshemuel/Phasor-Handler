@@ -11,11 +11,12 @@ from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QFont, QColor
 import numpy as np
 import os
-import pickle
-import subprocess
-import sys
 import tifffile
-from phasor_handler.tools.misc import detect_source_type
+from phasor_handler.tools.lazy_stack import LazyFrameStack, discover_channel_npy_files
+from phasor_handler.tools.misc import (
+    load_or_create_experiment_metadata,
+    resolve_pixel_size,
+)
 
 
 class ImageViewWidget(QWidget):
@@ -379,6 +380,8 @@ class ImageViewWidget(QWidget):
             reg_tif_chan2_path = os.path.join(directory_path, "Ch2-reg.tif")
             npy_ch0_path = os.path.join(directory_path, "ImageData_Ch0_TP0000000.npy")
             npy_ch1_path = os.path.join(directory_path, "ImageData_Ch1_TP0000000.npy")
+            npy_ch0_files = discover_channel_npy_files(directory_path, "ImageData_Ch0")
+            npy_ch1_files = discover_channel_npy_files(directory_path, "ImageData_Ch1")
             
             # Check for mini (OPES) format directories
             cellvideo1_path = os.path.join(directory_path, "CellVideo1", "CellVideo")
@@ -389,17 +392,17 @@ class ImageViewWidget(QWidget):
             
             # Check what files are available
             result['has_registered_tif'] = os.path.isfile(reg_tif_path)
-            result['has_raw_numpy'] = (os.path.isfile(npy_ch0_path) or 
+            result['has_raw_numpy'] = (bool(npy_ch0_files or npy_ch1_files) or
                                        os.path.isdir(cellvideo1_path))
             
             # Load image data based on preference and availability
             if use_registered and result['has_registered_tif']:
                 self._load_registered_tiffs(reg_tif_path, reg_tif_chan2_path, result)
             elif not use_registered and result['has_raw_numpy']:
-                self._load_raw_numpy(npy_ch0_path, npy_ch1_path, result)
+                self._load_raw_numpy(npy_ch0_path, npy_ch1_path, result, directory_path)
             elif use_registered and not result['has_registered_tif'] and result['has_raw_numpy']:
                 # Fallback to raw numpy if registered not available
-                self._load_raw_numpy(npy_ch0_path, npy_ch1_path, result)
+                self._load_raw_numpy(npy_ch0_path, npy_ch1_path, result, directory_path)
             elif not use_registered and not result['has_raw_numpy'] and result['has_registered_tif']:
                 # Fallback to registered if raw not available
                 self._load_registered_tiffs(reg_tif_path, reg_tif_chan2_path, result)
@@ -449,25 +452,33 @@ class ImageViewWidget(QWidget):
         except Exception as e:
             raise Exception(f"Failed to load registered TIFF files: {e}")
 
-    def _load_raw_numpy(self, npy_ch0_path, npy_ch1_path, result):
+    def _load_raw_numpy(self, npy_ch0_path, npy_ch1_path, result, directory_path=None):
         """Load raw numpy files (3i format) or raw TIFF files (mini format)."""
         self.set_loading_message("Loading raw data files...")
         
         try:
             # Check if this is 3i format (.npy files) or mini format (CellVideo directories)
-            is_3i_format = os.path.isfile(npy_ch0_path)
+            directory_path = directory_path or os.path.dirname(npy_ch0_path)
+            ch0_files = discover_channel_npy_files(directory_path, "ImageData_Ch0")
+            ch1_files = discover_channel_npy_files(directory_path, "ImageData_Ch1")
+            is_3i_format = bool(ch0_files or ch1_files)
             
             if is_3i_format:
-                # 3i format: Load from .npy files
-                print(f"DEBUG: Loading 3i raw numpy from {npy_ch0_path}")
-                result['tif'] = np.load(npy_ch0_path)
-                print(f"DEBUG: Ch0 shape: {result['tif'].shape}, dtype: {result['tif'].dtype}")
+                # 3i format: memory-map one or more split .npy files as one logical stack
+                if ch0_files:
+                    print(f"DEBUG: Loading 3i raw numpy from {len(ch0_files)} Ch0 file(s)")
+                    result['tif'] = LazyFrameStack(ch0_files)
+                    print(f"DEBUG: Ch0 shape: {result['tif'].shape}, dtype: {result['tif'].dtype}")
                 
                 # Load Channel 1 (usually Channel 2 in the UI) if available
-                if os.path.isfile(npy_ch1_path):
-                    print(f"DEBUG: Loading Ch1 from {npy_ch1_path}")
-                    result['tif_chan2'] = np.load(npy_ch1_path)
-                    print(f"DEBUG: Ch1 shape: {result['tif_chan2'].shape}, dtype: {result['tif_chan2'].dtype}")
+                if ch1_files:
+                    print(f"DEBUG: Loading 3i raw numpy from {len(ch1_files)} Ch1 file(s)")
+                    ch1_stack = LazyFrameStack(ch1_files)
+                    if result['tif'] is None:
+                        result['tif'] = ch1_stack
+                    else:
+                        result['tif_chan2'] = ch1_stack
+                    print(f"DEBUG: Ch1 shape: {ch1_stack.shape}, dtype: {ch1_stack.dtype}")
             else:
                 # Mini (OPES) format: Load from CellVideo1/CellVideo/*.tif(f) and CellVideo2/CellVideo/*.tif(f)
                 print(f"DEBUG: Detected mini (OPES) format, looking for CellVideo directories")
@@ -513,6 +524,8 @@ class ImageViewWidget(QWidget):
         
         # Try multiple loading methods
         loading_methods = [
+            ("tifffile.memmap", lambda: tifffile.memmap(tiff_path)),
+            ("tifffile.imread(out='memmap')", lambda: tifffile.imread(tiff_path, out="memmap")),
             ("tifffile.imread", lambda: tifffile.imread(tiff_path)),
             ("tifffile.imread(memmap=False)", lambda: tifffile.imread(tiff_path, memmap=False)),
             ("page-by-page", lambda: self._load_tiff_page_by_page(tiff_path))
@@ -632,79 +645,11 @@ class ImageViewWidget(QWidget):
 
     def _load_experiment_metadata(self, exp_details, exp_json, directory_path):
         """Load experiment metadata from pickle or JSON files."""
-        metadata = None
-        
-        # First try to read existing pickle file
-        if os.path.isfile(exp_details):
-            try:
-                print(f"DEBUG: Loading experiment metadata from {exp_details}")
-                with open(exp_details, 'rb') as f:
-                    metadata = pickle.load(f)
-                print(f"DEBUG: Loaded experiment metadata type: {type(metadata)}")
-            except Exception as e:
-                print(f"DEBUG: Failed to load pickle metadata: {e}")
-        
-        # If no metadata exists or failed to load, try JSON
-        if metadata is None and os.path.isfile(exp_json):
-            try:
-                print(f"DEBUG: Loading experiment metadata from {exp_json}")
-                import json
-                with open(exp_json, 'r') as f:
-                    metadata = json.load(f)
-                print(f"DEBUG: Loaded JSON metadata")
-            except Exception as e:
-                print(f"DEBUG: Failed to load JSON metadata: {e}")
-        
-        # If still no metadata, try to generate from raw source files
+        metadata = load_or_create_experiment_metadata(directory_path)
         if metadata is None:
-            try:
-                print(f"DEBUG: Attempting to read metadata from raw files in {directory_path}")
-
-                source_type = detect_source_type(directory_path)
-
-                if source_type is None:
-                    print(f"DEBUG: Cannot detect source type for {directory_path}, skipping metadata generation")
-                else:
-                    project_root = os.path.abspath(
-                        os.path.join(os.path.dirname(__file__), '..', '..', '..')
-                    )
-                    meta_script = os.path.join(project_root, 'scripts', 'meta_reader.py')
-
-                    if not os.path.exists(meta_script):
-                        print(f"DEBUG: meta_reader.py not found at {meta_script}")
-                    else:
-                        cmd = [sys.executable, meta_script, '-s', source_type, directory_path]
-                        print(f"DEBUG: Running metadata extraction: {' '.join(cmd)}")
-
-                        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-
-                        result = subprocess.run(
-                            cmd,
-                            capture_output=True,
-                            text=True,
-                            timeout=60,
-                            cwd=project_root,
-                            creationflags=creationflags
-                        )
-
-                        if result.returncode == 0:
-                            print("DEBUG: meta_reader.py executed successfully")
-                            if os.path.isfile(exp_details):
-                                with open(exp_details, 'rb') as f:
-                                    metadata = pickle.load(f)
-                                print("DEBUG: Successfully loaded newly created metadata")
-                            elif os.path.isfile(exp_json):
-                                import json
-                                with open(exp_json, 'r') as f:
-                                    metadata = json.load(f)
-                                print("DEBUG: Successfully loaded newly created JSON metadata")
-                        else:
-                            print(f"DEBUG: meta_reader.py failed (exit {result.returncode}): {result.stderr}")
-            except subprocess.TimeoutExpired:
-                print(f"DEBUG: meta_reader.py timed out for {directory_path}")
-            except Exception as e:
-                print(f"DEBUG: Failed to run meta_reader.py: {e}")
-        
+            print(f"DEBUG: No experiment metadata available for {directory_path}")
+        else:
+            print(f"DEBUG: Loaded experiment metadata type: {type(metadata)}")
         return metadata
 
     def clear_experiment(self):
@@ -843,22 +788,13 @@ class ImageViewWidget(QWidget):
             # Try different possible locations for pixel size
             if isinstance(metadata, dict):
                 # Check direct key
-                if 'pixel_size' in metadata:
-                    pixel_size_str = str(metadata['pixel_size'])
-                    return self._parse_pixel_size_string(pixel_size_str)
-                
-                # Check nested structure from ImageRecord.yaml (3i format)
-                if ('ImageRecord.yaml' in metadata and 
-                    'CLensDef70' in metadata['ImageRecord.yaml'] and
-                    'mMicronPerPixel' in metadata['ImageRecord.yaml']['CLensDef70']):
-                    return float(metadata['ImageRecord.yaml']['CLensDef70']['mMicronPerPixel'])
-                    
-            # Try as object with attributes
-            elif hasattr(metadata, 'pixel_size'):
-                pixel_size_str = str(metadata.pixel_size)
-                return self._parse_pixel_size_string(pixel_size_str)
-            elif hasattr(metadata, 'mMicronPerPixel'):
-                return float(metadata.mMicronPerPixel)
+                pixel_size = resolve_pixel_size(metadata)
+                if pixel_size is not None:
+                    return pixel_size
+            else:
+                pixel_size = resolve_pixel_size(metadata)
+                if pixel_size is not None:
+                    return pixel_size
                 
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             print(f"DEBUG: Could not extract pixel size from metadata: {e}")

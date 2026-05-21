@@ -12,7 +12,6 @@ This component handles all ROI list management including:
 
 import json
 import os
-import pickle
 import random
 import numpy as np
 from PyQt6.QtWidgets import (
@@ -20,7 +19,7 @@ from PyQt6.QtWidgets import (
     QGridLayout, QFileDialog, QMessageBox, QProgressDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF
-from phasor_handler.tools.misc import resolve_timestamps
+from phasor_handler.tools.misc import load_or_create_experiment_metadata, resolve_timestamps
 
 
 class RoiListWidget(QWidget):
@@ -637,27 +636,16 @@ class RoiListWidget(QWidget):
                 tif = tif[None, ...]  # Add frame dimension
                 if tif_chan2 is not None:
                     tif_chan2 = tif_chan2[None, ...]
+            if tif_chan2 is not None and getattr(tif_chan2, 'ndim', 0) == 3:
+                nframes = min(nframes, tif_chan2.shape[0])
             
-            # Reload metadata from disk if it's missing (may have been created by a worker)
+            # Reload or create metadata so exports keep timing after raw load or worker completion.
             if not getattr(self.main_window, '_exp_data', None):
                 dir_path = None
                 if hasattr(self.main_window, '_get_current_directory_path'):
                     dir_path = self.main_window._get_current_directory_path()
                 if dir_path:
-                    exp_pkl = os.path.join(dir_path, "experiment_summary.pkl")
-                    exp_json_path = os.path.join(dir_path, "experiment_summary.json")
-                    if os.path.isfile(exp_pkl):
-                        try:
-                            with open(exp_pkl, 'rb') as f:
-                                self.main_window._exp_data = pickle.load(f)
-                        except Exception:
-                            pass
-                    if not self.main_window._exp_data and os.path.isfile(exp_json_path):
-                        try:
-                            with open(exp_json_path, 'r') as f:
-                                self.main_window._exp_data = json.load(f)
-                        except Exception:
-                            pass
+                    self.main_window._exp_data = load_or_create_experiment_metadata(dir_path)
 
             # Get current formula selection
             formula_index = getattr(self.main_window, 'formula_dropdown', None)
@@ -780,6 +768,12 @@ class RoiListWidget(QWidget):
             _resolved_timestamps = resolve_timestamps(
                 getattr(self.main_window, '_exp_data', None), nframes
             )
+            if _resolved_timestamps is None:
+                QMessageBox.warning(
+                    self,
+                    "Missing Time Metadata",
+                    "No timing metadata was found. The exported Time column will use 0.000000 for all frames."
+                )
 
             # Extract data for all frames and all ROIs
             export_data = []

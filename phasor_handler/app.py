@@ -178,28 +178,17 @@ class MainWindow(QMainWindow):
         if not dir_path:
             return
 
-        import pickle
-        import json
+        from .tools.misc import load_or_create_experiment_metadata
 
-        exp_pkl = os.path.join(dir_path, "experiment_summary.pkl")
-        exp_json = os.path.join(dir_path, "experiment_summary.json")
-
-        metadata = None
-        if os.path.isfile(exp_pkl):
-            try:
-                with open(exp_pkl, 'rb') as f:
-                    metadata = pickle.load(f)
-            except Exception:
-                pass
-        if metadata is None and os.path.isfile(exp_json):
-            try:
-                with open(exp_json, 'r') as f:
-                    metadata = json.load(f)
-            except Exception:
-                pass
+        metadata = load_or_create_experiment_metadata(dir_path)
 
         if metadata is not None:
             self._exp_data = metadata
+            if hasattr(self, "update_tif_frame"):
+                try:
+                    self.update_tif_frame()
+                except Exception:
+                    pass
 
     def run_conversion_script(self):
         if not self.selected_dirs:

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QLocale
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from phasor_handler.tools.lazy_stack import LazyFrameStack, to_stack3d
 
 
 class TraceplotWidget(QWidget):
@@ -194,6 +195,27 @@ class TraceplotWidget(QWidget):
             'trace_canvas': self.trace_canvas
         }
 
+    def _mean_trace_for_region(self, stack, x0, y0, x1, y1, mask=None, chunk_size=256):
+        """Compute a mean trace without materializing lazy split stacks."""
+        stack = to_stack3d(stack)
+        if stack is None:
+            return None
+
+        if isinstance(stack, LazyFrameStack):
+            values = []
+            for _, chunk in stack.iter_chunks(chunk_size):
+                crop = chunk[:, y0:y1, x0:x1]
+                if mask is not None and mask.size > 0 and np.any(mask) and crop.shape[1:] == mask.shape:
+                    values.append(crop[:, mask].mean(axis=1))
+                else:
+                    values.append(crop.mean(axis=(1, 2)))
+            return np.concatenate(values).astype(np.float32) if values else np.array([], dtype=np.float32)
+
+        crop = stack[:, y0:y1, x0:x1]
+        if mask is not None and mask.size > 0 and np.any(mask) and crop.shape[1:] == mask.shape:
+            return crop[:, mask].mean(axis=1).astype(np.float32)
+        return crop.mean(axis=(1, 2)).astype(np.float32)
+
     def _update_trace_from_roi(self, index=None):
         """Update the trace plot based on current ROI selection."""
         print(f"DEBUG: TraceplotWidget._update_trace_from_roi called with index={index}")
@@ -234,61 +256,40 @@ class TraceplotWidget(QWidget):
             # Fallback to rectangular region
             print(f"DEBUG: No masks found. Using rectangular ROI for signal extraction")
             x0, y0, x1, y1 = self.main_window._last_roi_xyxy
-            def stack3d(a):
-                a = np.asarray(a).squeeze()
-                return a[None, ...] if a.ndim == 2 else a
 
-            ch1 = stack3d(self.main_window._current_tif)
-            sig1 = ch1[:, y0:y1, x0:x1].mean(axis=(1,2)) if (x1>x0 and y1>y0) else np.zeros((ch1.shape[0],), dtype=np.float32)
+            ch1 = to_stack3d(self.main_window._current_tif)
+            sig1 = self._mean_trace_for_region(ch1, x0, y0, x1, y1) if (x1>x0 and y1>y0) else np.zeros((ch1.shape[0],), dtype=np.float32)
 
             ch2 = getattr(self.main_window, "_current_tif_chan2", None)
             sig2 = None
             if ch2 is not None:
-                ch2 = stack3d(ch2)
-                sig2 = ch2[:, y0:y1, x0:x1].mean(axis=(1,2))
+                ch2 = to_stack3d(ch2)
+                sig2 = self._mean_trace_for_region(ch2, x0, y0, x1, y1)
         else:
             # Use ellipse mask for proper signal extraction
             X0, Y0, X1, Y1, mask = mask_result
-            
-            def stack3d(a):
-                a = np.asarray(a).squeeze()
-                return a[None, ...] if a.ndim == 2 else a
 
-            ch1 = stack3d(self.main_window._current_tif)
+            ch1 = to_stack3d(self.main_window._current_tif)
             
             # Extract signal using the ellipse mask
             if mask.size > 0 and np.any(mask):
-                # Apply mask to each frame
-                sig1_frames = []
-                for frame_idx in range(ch1.shape[0]):
-                    frame = ch1[frame_idx, Y0:Y1, X0:X1]
-                    if frame.shape == mask.shape:
-                        masked_values = frame[mask]
-                        sig1_frames.append(np.mean(masked_values) if len(masked_values) > 0 else 0.0)
-                    else:
-                        print(f"Warning: Frame shape {frame.shape} doesn't match mask shape {mask.shape}")
-                        sig1_frames.append(0.0)
-                sig1 = np.array(sig1_frames, dtype=np.float32)
+                sig1 = self._mean_trace_for_region(ch1, X0, Y0, X1, Y1, mask)
             else:
                 sig1 = np.zeros((ch1.shape[0],), dtype=np.float32)
 
             ch2 = getattr(self.main_window, "_current_tif_chan2", None)
             sig2 = None
             if ch2 is not None:
-                ch2 = stack3d(ch2)
+                ch2 = to_stack3d(ch2)
                 if mask.size > 0 and np.any(mask):
-                    # Apply mask to each frame of channel 2
-                    sig2_frames = []
-                    for frame_idx in range(ch2.shape[0]):
-                        frame = ch2[frame_idx, Y0:Y1, X0:X1]
-                        if frame.shape == mask.shape:
-                            masked_values = frame[mask]
-                            sig2_frames.append(np.mean(masked_values) if len(masked_values) > 0 else 0.0)
-                        else:
-                            sig2_frames.append(0.0)
-                    sig2 = np.array(sig2_frames, dtype=np.float32)
+                    sig2 = self._mean_trace_for_region(ch2, X0, Y0, X1, Y1, mask)
                 else:
                     sig2 = np.zeros((ch2.shape[0],), dtype=np.float32)
+
+        if sig2 is not None and len(sig2) != len(sig1):
+            common_len = min(len(sig1), len(sig2))
+            sig1 = sig1[:common_len]
+            sig2 = sig2[:common_len]
 
         # Compute Fo (baseline) as mean over first N seconds of frames of sig1
         nframes = sig1.shape[0]
