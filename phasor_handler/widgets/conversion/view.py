@@ -65,11 +65,11 @@ class ConversionWidget(QWidget):
 		run_layout = QVBoxLayout()
 
 		run_btn = QPushButton("Run Conversion on All Directories")
-		run_btn.setStyleSheet("font-weight: bold;")
+		run_btn.setProperty("class", "primary")
 		run_btn.clicked.connect(self.window.run_conversion_script)
 
 		convert_register_btn = QPushButton("Convert + Register All Directories")
-		convert_register_btn.setStyleSheet("font-weight: bold;")
+		convert_register_btn.setProperty("class", "primary")
 		convert_register_btn.setToolTip(
 			"Run conversion followed by registration in one step.\n"
 			"Uses registration parameters from the Registration tab.")

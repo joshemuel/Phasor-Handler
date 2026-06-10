@@ -72,7 +72,7 @@ class RegistrationWidget(QWidget):
         # --- Run Registration Button ---
         mid_hbox = QHBoxLayout()
         run_btn = QPushButton("Run Registration on Selected Directories")
-        run_btn.setStyleSheet("font-weight: bold;")
+        run_btn.setProperty("class", "primary")
         checkbox_label = QLabel("[KEEP ON] Concatenate Suite2p Registered Recordings Per Channel:")
         checkbox_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
