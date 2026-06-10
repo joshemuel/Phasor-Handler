@@ -363,6 +363,30 @@ def build_qss():
         background-color: {t.SURFACE_HOVER};
     }}
 
+    /* ---------- Tool bars (e.g. matplotlib navigation) ---------- */
+    QToolBar {{
+        background-color: {t.SURFACE};
+        border: none;
+        border-radius: {t.RADIUS_CONTROL}px;
+        spacing: 2px;
+        padding: 2px;
+    }}
+    QToolButton {{
+        background-color: transparent;
+        color: {t.TEXT};
+        border: {t.BORDER}px solid transparent;
+        border-radius: {t.RADIUS_CONTROL}px;
+        padding: 3px;
+    }}
+    QToolButton:hover {{
+        background-color: {t.ELEVATED};
+        border-color: {t.ACCENT_DIM};
+    }}
+    QToolButton:checked {{
+        background-color: {accent_glow};
+        border-color: {t.ACCENT};
+    }}
+
     /* ---------- Labels ---------- */
     QLabel {{
         background-color: transparent;

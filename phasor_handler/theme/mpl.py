@@ -178,10 +178,11 @@ def render_trace_pixmap(trace, *, width_px, height_px, device_pixel_ratio=1.0,
         fig.tight_layout(pad=0.4)
         canvas.draw()
 
-        w, h = canvas.get_width_height(physical=True)
-        # buffer_rgba() returns a view into the renderer; tobytes() makes an owned
-        # copy so the QImage does not outlive the figure's buffer (lifetime safe).
-        buf = np.asarray(canvas.buffer_rgba()).reshape(h, w, 4)
+        # Read dimensions straight from the buffer (robust across mpl versions).
+        buf = np.asarray(canvas.buffer_rgba())  # shape (H, W, 4)
+        h, w = buf.shape[0], buf.shape[1]
+        # tobytes() makes an owned copy so the QImage does not outlive the figure's
+        # render buffer (the classic QImage-over-numpy lifetime footgun).
         qimg = QImage(buf.tobytes(), w, h, 4 * w, QImage.Format.Format_RGBA8888)
         pix = QPixmap.fromImage(qimg)
         pix.setDevicePixelRatio(dpr)
