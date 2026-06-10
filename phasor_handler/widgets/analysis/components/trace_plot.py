@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QLocale
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from phasor_handler.tools.lazy_stack import LazyFrameStack, to_stack3d
+from phasor_handler.theme import tokens
+from phasor_handler.theme.mpl import style_axes
 
 
 class TraceplotWidget(QWidget):
@@ -152,20 +154,16 @@ class TraceplotWidget(QWidget):
         self.trace_ax.set_yticks([])
         self.trace_ax.set_xlabel("")
         self.trace_ax.set_ylabel("")
-        for spine in self.trace_ax.spines.values():
-            spine.set_visible(True)
         self.trace_fig.patch.set_alpha(0.0)
-        self.trace_ax.set_facecolor('none')
         self.trace_canvas = FigureCanvas(self.trace_fig)
-        self.trace_canvas.setStyleSheet("background:transparent; border: 1px solid #888;")
+        self.trace_canvas.setStyleSheet(
+            f"background:transparent; border: 1px solid {tokens.HAIRLINE};")
         self.trace_canvas.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.trace_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.trace_ax.xaxis.label.set_color('white')
-        self.trace_ax.yaxis.label.set_color('white')
-        self.trace_ax.tick_params(axis='x', colors='white')
-        self.trace_ax.tick_params(axis='y', colors='white')
-        for spine in self.trace_ax.spines.values():
-            spine.set_color('white')
+        # Transparent so the themed pane shows through; spines/ticks via shared helper.
+        style_axes(self.trace_ax, variant="trace", transparent=True)
+        self.trace_ax.xaxis.label.set_color(tokens.MUTED)
+        self.trace_ax.yaxis.label.set_color(tokens.MUTED)
         self.trace_fig.tight_layout()
         
         main_layout.addWidget(self.trace_canvas, 1)  # Give stretch factor of 1 to make it expand
@@ -410,13 +408,13 @@ class TraceplotWidget(QWidget):
 
         # Plot metric with appropriate x-axis
         if x_values is not None:
-            self.trace_ax.plot(x_values, metric, label="(F green - Fo green)/F red", color='white')
+            self.trace_ax.plot(x_values, metric, label="(F green - Fo green)/F red", color=tokens.ACCENT)
         else:
-            self.trace_ax.plot(metric, label="(F green - Fo green)/F red", color='white')
-        
-        self.trace_ax.set_xlabel(x_label, color='white', labelpad=2)
+            self.trace_ax.plot(metric, label="(F green - Fo green)/F red", color=tokens.ACCENT)
+
+        self.trace_ax.set_xlabel(x_label, color=tokens.MUTED, labelpad=2)
         self.trace_ax.tick_params(axis='x', pad=1, labelsize=9)
-        self._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=20, linewidth=2)
+        self._frame_vline = self.trace_ax.axvline(current_x_pos, color=tokens.WARN, linestyle='-', zorder=20, linewidth=2)
         
         # Store frame vline reference on main window for compatibility
         if self.main_window:
@@ -442,11 +440,11 @@ class TraceplotWidget(QWidget):
                     stim_frame = int(stim)
                     if stim_frame < len(resolved):
                         stim_x_pos = resolved[stim_frame]
-                        self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
+                        self.trace_ax.axvline(stim_x_pos, color=tokens.DANGER, linestyle='--', zorder=15, linewidth=2)
             else:
                 for stim in stims:
                     stim_frame = int(stim)
-                    self.trace_ax.axvline(stim_frame, color='red', linestyle='--', zorder=15, linewidth=2)
+                    self.trace_ax.axvline(stim_frame, color=tokens.DANGER, linestyle='--', zorder=15, linewidth=2)
         except Exception as e:
             # keep plotting even if stim drawing fails
             print(f"DEBUG: Error adding stimulation vlines: {e}")
@@ -501,6 +499,9 @@ class TraceplotWidget(QWidget):
             print(f"DEBUG: Error setting y-limits: {e}")
             pass
 
+        # Re-apply themed spines/ticks (cla() above resets them).
+        style_axes(self.trace_ax, variant="trace", transparent=True)
+        self.trace_ax.yaxis.label.set_color(tokens.MUTED)
         self.trace_fig.tight_layout()
         self.trace_canvas.draw_idle()
 
@@ -636,7 +637,7 @@ class TraceplotWidget(QWidget):
 
         # Ensure we have a persistent vline and move it (create if missing)
         if not hasattr(self, '_frame_vline') or self._frame_vline is None:
-            self._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=10, linewidth=2)
+            self._frame_vline = self.trace_ax.axvline(current_x_pos, color=tokens.WARN, linestyle='-', zorder=10, linewidth=2)
             if self.main_window:
                 self.main_window._frame_vline = self._frame_vline
         else:
@@ -644,7 +645,7 @@ class TraceplotWidget(QWidget):
                 self._frame_vline.set_xdata([current_x_pos, current_x_pos])
             except Exception:
                 # recreate fallback
-                self._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=10, linewidth=2)
+                self._frame_vline = self.trace_ax.axvline(current_x_pos, color=tokens.WARN, linestyle='-', zorder=10, linewidth=2)
                 if self.main_window:
                     self.main_window._frame_vline = self._frame_vline
 
@@ -856,15 +857,9 @@ class TraceplotWidget(QWidget):
             self.trace_ax.set_yticks([])
             self.trace_ax.set_xlabel("")
             self.trace_ax.set_ylabel("")
-            for spine in self.trace_ax.spines.values():
-                spine.set_visible(True)
-            self.trace_ax.set_facecolor('none')
-            self.trace_ax.xaxis.label.set_color('white')
-            self.trace_ax.yaxis.label.set_color('white')
-            self.trace_ax.tick_params(axis='x', colors='white')
-            self.trace_ax.tick_params(axis='y', colors='white')
-            for spine in self.trace_ax.spines.values():
-                spine.set_color('white')
+            style_axes(self.trace_ax, variant="trace", transparent=True)
+            self.trace_ax.xaxis.label.set_color(tokens.MUTED)
+            self.trace_ax.yaxis.label.set_color(tokens.MUTED)
         
         # Disable and reset y-limit spinboxes when trace is cleared
         if hasattr(self, 'ylim_min_edit'):

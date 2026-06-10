@@ -14,6 +14,8 @@ from PyQt6.QtCore import pyqtSignal, QThread
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from ....workers import HistogramWorker
+from phasor_handler.theme import tokens
+from phasor_handler.theme.mpl import style_axes
 
 
 class BnCWidget(QWidget):
@@ -119,21 +121,16 @@ class BnCWidget(QWidget):
         
         # Histogram display - smaller size
         self.histogram_figure = Figure(figsize=(2.5, 0.8), dpi=80)
-        self.histogram_figure.patch.set_facecolor('#31363b')  # Match dark theme
+        self.histogram_figure.patch.set_facecolor(tokens.ELEVATED)  # Match dark theme
         self.histogram_canvas = FigureCanvas(self.histogram_figure)
         self.histogram_canvas.setMinimumHeight(60)
         self.histogram_canvas.setMaximumHeight(80)
-        
+
         self.histogram_ax = self.histogram_figure.add_subplot(111)
-        self.histogram_ax.set_facecolor('#232629')  # Darker background for plot area
-        
-        # Hide axes
-        self.histogram_ax.set_xticks([])
-        self.histogram_ax.set_yticks([])
-        self.histogram_ax.spines['top'].set_visible(False)
-        self.histogram_ax.spines['right'].set_visible(False)
-        self.histogram_ax.spines['bottom'].set_visible(False)
-        self.histogram_ax.spines['left'].set_visible(False)
+        self.histogram_ax.set_facecolor(tokens.SURFACE)  # Darker background for plot area
+
+        # Hide axes and ticks (shared helper)
+        style_axes(self.histogram_ax, variant="histogram")
         
         # Initialize histogram lines
         self._min_line = None
@@ -337,43 +334,35 @@ class BnCWidget(QWidget):
     def _clear_histogram(self):
         """Clear the histogram display."""
         self.histogram_ax.clear()
-        
-        # Hide axes
-        self.histogram_ax.set_xticks([])
-        self.histogram_ax.set_yticks([])
-        self.histogram_ax.spines['top'].set_visible(False)
-        self.histogram_ax.spines['right'].set_visible(False)
-        self.histogram_ax.spines['bottom'].set_visible(False)
-        self.histogram_ax.spines['left'].set_visible(False)
-        
+
+        # Hide axes (shared helper) and restore the dark plot face
+        style_axes(self.histogram_ax, variant="histogram")
+        self.histogram_ax.set_facecolor(tokens.SURFACE)
+
         self.histogram_canvas.draw()
         
     def _on_histogram_computed(self, counts, bins, min_val, max_val):
         """Handle histogram computation results from worker thread."""
         try:
             self.histogram_ax.clear()
-            
-            # Hide axes
-            self.histogram_ax.set_xticks([])
-            self.histogram_ax.set_yticks([])
-            self.histogram_ax.spines['top'].set_visible(False)
-            self.histogram_ax.spines['right'].set_visible(False)
-            self.histogram_ax.spines['bottom'].set_visible(False)
-            self.histogram_ax.spines['left'].set_visible(False)
-            
+
+            # Hide axes (shared helper) and restore the dark plot face
+            style_axes(self.histogram_ax, variant="histogram")
+            self.histogram_ax.set_facecolor(tokens.SURFACE)
+
             # Plot histogram using bar
             bin_centers = (bins[:-1] + bins[1:]) / 2
             self.histogram_ax.bar(
                 bin_centers, counts, width=1.0,
                 color=self._current_hist_color, alpha=0.7, edgecolor='none'
             )
-            
-            # Add vertical lines for min/max percentiles
+
+            # Add vertical lines for min/max percentiles (accent / amber, distinct)
             self._min_line = self.histogram_ax.axvline(
-                min_val, color='cyan', linewidth=1.5, linestyle='--', alpha=0.8
+                min_val, color=tokens.ACCENT, linewidth=1.5, linestyle='--', alpha=0.9
             )
             self._max_line = self.histogram_ax.axvline(
-                max_val, color='magenta', linewidth=1.5, linestyle='--', alpha=0.8
+                max_val, color=tokens.WARN, linewidth=1.5, linestyle='--', alpha=0.9
             )
             
             # Set limits
