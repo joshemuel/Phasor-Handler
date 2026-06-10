@@ -16,14 +16,28 @@ from PyQt6.QtCore import QThread
 from .widgets import ConversionWidget, RegistrationWidget, AnalysisWidget, SecondLevelWidget
 from .workers import RegistrationWorker, ConversionWorker, ConvertRegisterWorker
 from .models.dir_manager import DirManager
-from .themes import apply_dark_theme
-import qdarktheme
+from .theme import apply_theme
+
+
+def _resolve_icon_path():
+    """Resolve the window icon package-relative so it works regardless of CWD.
+
+    The legacy relative path 'img/logo.ico' only resolved when the process was
+    launched from the package directory; otherwise it silently yielded a null
+    icon. Falls back to the legacy string if resolution fails.
+    """
+    try:
+        from importlib.resources import files
+        return str(files("phasor_handler") / "img" / "logo.ico")
+    except Exception:
+        return "img/logo.ico"
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Phasor Handler v2.0")
-        self.setWindowIcon(QIcon('img/logo.ico'))
+        self.setWindowIcon(QIcon(_resolve_icon_path()))
         # self.setMinimumSize(1400, 1000)
         # central directory manager (shared with widgets)
         self.dir_manager = DirManager()
@@ -366,9 +380,9 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     try:
-        qdarktheme.setup_theme()  # or your own apply_dark_theme()
+        apply_theme(app)  # Ice Cyan design-system theme (tokens + fonts + matplotlib)
     except Exception:
-        pass  # fall back to default if theme package missing
+        pass  # never let theming block launch; fall back to default look
     window = MainWindow()
     window.showMaximized()
     sys.exit(app.exec())
