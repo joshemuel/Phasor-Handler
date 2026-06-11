@@ -1,5 +1,5 @@
 """
-Bundled-font loading for the Ice Cyan theme.
+Bundled-font loading for the Phasor Handler themes.
 
 Registers the bundled OFL TTFs (Space Grotesk for display, JetBrains Mono for
 numerics/logs/plots) with both Qt (QFontDatabase) and matplotlib (font_manager),

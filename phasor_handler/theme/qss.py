@@ -1,21 +1,31 @@
 """
-Qt stylesheet builder for the Ice Cyan theme.
+Qt stylesheet builder for the Phasor Handler themes.
 
 build_qss() returns one application-wide stylesheet assembled from the design
-tokens and the resolved font families. It deliberately covers every widget class
-the app uses (and the native dialogs qdarktheme used to style) so dropping
-qdarktheme leaves nothing unthemed.
+tokens (whichever palette is active) and the resolved font families. It
+deliberately covers every widget class the app uses (and the native dialogs
+qdarktheme used to style) so dropping qdarktheme leaves nothing unthemed.
+Palette-specific decorations (the Ghibli soot-sprite slider handles) are
+appended when their palette is active.
 """
 
 from . import tokens as t
 from . import fonts as f
 
 
-def build_qss():
-    """Return the full application stylesheet as a string."""
+def build_qss(arrows=None):
+    """Return the full application stylesheet as a string.
+
+    arrows: optional dict {"up": path, "down": path} of QSS-ready paths to arrow
+    images for spin-box / combo-box sub-controls. When provided, explicit
+    ::up-arrow / ::down-arrow rules are emitted so the arrows render (Qt hides the
+    native glyph once the buttons are themed). When None, those rules are omitted.
+    """
     display = f.DISPLAY_FAMILY
     mono = f.MONO_FAMILY
     accent_glow = t.with_alpha(t.ACCENT, 0.12)
+    arrow_qss = _spin_arrow_rules(arrows)
+    combo_arrow_qss = _combo_arrow_rule(arrows)
 
     return f"""
     /* ---------- Base ---------- */
@@ -65,19 +75,23 @@ def build_qss():
     }}
 
     /* ---------- Group boxes ---------- */
+    /* The title floats fully above the frame (margin-top > title height) with a
+       transparent background, so no rectangle ever overlaps the border line. */
     QGroupBox {{
         background-color: {t.SURFACE};
         border: {t.BORDER}px solid {t.HAIRLINE};
         border-radius: {t.RADIUS_PANEL}px;
-        margin-top: 14px;
+        margin-top: 18px;
         padding: 10px 10px 8px 10px;
         font-weight: 600;
     }}
     QGroupBox::title {{
         subcontrol-origin: margin;
         subcontrol-position: top left;
-        left: 12px;
-        padding: 0 6px;
+        left: 6px;
+        top: 0px;
+        padding: 0 2px;
+        background-color: transparent;
         color: {t.MUTED};
         font-size: 11px;
         letter-spacing: 0.6px;
@@ -133,6 +147,24 @@ def build_qss():
         background-color: {t.DISABLED_BG};
         color: {t.DISABLED_TEXT};
         border-color: {t.HAIRLINE};
+    }}
+
+    /* Preferences gear in the tab-bar corner: flat, muted, accent on hover */
+    QPushButton#prefs_button {{
+        background-color: transparent;
+        color: {t.MUTED};
+        border: none;
+        padding: 4px 10px;
+        margin: 0 6px 2px 0;
+        font-weight: 600;
+    }}
+    QPushButton#prefs_button:hover {{
+        color: {t.ACCENT};
+        background-color: transparent;
+        border: none;
+    }}
+    QPushButton#prefs_button:pressed {{
+        color: {t.ACCENT_PRESSED};
     }}
 
     /* ---------- Text inputs / logs ---------- */
@@ -208,6 +240,9 @@ def build_qss():
         border-bottom-right-radius: {t.RADIUS_CONTROL}px;
         background-color: {t.SURFACE};
     }}
+    QComboBox::drop-down:hover {{
+        background-color: {t.SURFACE_HOVER};
+    }}{combo_arrow_qss}
     QComboBox QAbstractItemView {{
         background-color: {t.ELEVATED};
         color: {t.TEXT};
@@ -232,17 +267,29 @@ def build_qss():
     QSpinBox:focus, QDoubleSpinBox:focus {{
         border-color: {t.ACCENT};
     }}
-    QSpinBox::up-button, QSpinBox::down-button,
-    QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+    QSpinBox::up-button, QDoubleSpinBox::up-button {{
+        subcontrol-origin: border;
+        subcontrol-position: top right;
         background-color: {t.SURFACE};
-        border: {t.BORDER}px solid {t.HAIRLINE};
+        border-left: {t.BORDER}px solid {t.HAIRLINE};
+        border-bottom: {t.BORDER}px solid {t.HAIRLINE};
+        border-top-right-radius: {t.RADIUS_CONTROL}px;
+        width: 18px;
+    }}
+    QSpinBox::down-button, QDoubleSpinBox::down-button {{
+        subcontrol-origin: border;
+        subcontrol-position: bottom right;
+        background-color: {t.SURFACE};
+        border-left: {t.BORDER}px solid {t.HAIRLINE};
+        border-top: {t.BORDER}px solid {t.HAIRLINE};
+        border-bottom-right-radius: {t.RADIUS_CONTROL}px;
         width: 18px;
     }}
     QSpinBox::up-button:hover, QSpinBox::down-button:hover,
     QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
         background-color: {t.SURFACE_HOVER};
-        border-color: {t.ACCENT};
     }}
+{arrow_qss}
 
     /* ---------- Checkboxes ---------- */
     QCheckBox {{
@@ -403,4 +450,73 @@ def build_qss():
     QGroupBox#bnc_group[zprojActive="true"] QDoubleSpinBox {{
         color: {t.DISABLED_TEXT};
     }}
+{_ghibli_rules()}
     """
+
+
+def _ghibli_rules():
+    """Ghibli-only decorations: soot-sprite (susuwatari) slider handles.
+
+    Returns '' for every other palette or when asset generation fails, so the
+    base styling above always remains intact.
+    """
+    if t.ACTIVE_NAME != "ghibli":
+        return ""
+    try:
+        from . import icons
+        assets = icons.ensure_ghibli_assets(t.TEXT)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not assets or "soot" not in assets:
+        return ""
+    return f"""
+    /* ---------- Ghibli: soot-sprite slider handle ---------- */
+    QSlider::handle:horizontal {{
+        image: url("{assets['soot']}");
+        background: transparent;
+        border: none;
+        width: 20px;
+        height: 20px;
+        margin: -8px 0;
+        border-radius: 0;
+    }}
+    QSlider::groove:horizontal {{
+        height: 4px;
+        background-color: {t.HAIRLINE};
+        border-radius: 2px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background-color: {t.ACCENT_DIM};
+        border-radius: 2px;
+    }}"""
+
+
+def _spin_arrow_rules(arrows):
+    """QSS for spin-box up/down arrow images, or '' when no assets were generated."""
+    if not arrows or "up" not in arrows or "down" not in arrows:
+        return ""
+    up = arrows["up"]
+    down = arrows["down"]
+    return f"""
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+        image: url("{up}");
+        width: 8px;
+        height: 8px;
+    }}
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+        image: url("{down}");
+        width: 8px;
+        height: 8px;
+    }}"""
+
+
+def _combo_arrow_rule(arrows):
+    """QSS for the combo-box drop-down arrow image, or '' when unavailable."""
+    if not arrows or "down" not in arrows:
+        return ""
+    return f"""
+    QComboBox::down-arrow {{
+        image: url("{arrows['down']}");
+        width: 9px;
+        height: 9px;
+    }}"""

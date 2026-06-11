@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QListWidget,
-    QPushButton, QSlider, QSizePolicy, QFileDialog, QMessageBox, 
-    QCheckBox, QDoubleSpinBox
+    QPushButton, QSlider, QSizePolicy, QFileDialog, QMessageBox,
+    QCheckBox, QDoubleSpinBox, QLabel, QComboBox, QGridLayout
 )
 from PyQt6.QtCore import Qt
 
@@ -10,7 +10,7 @@ import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .components import ImageViewWidget, TraceplotWidget, CircleRoiTool, RoiListWidget, MetadataViewer, BnCWidget
+from .components import ImageViewWidget, TraceplotWidget, CircleRoiTool, RoiListWidget, MetadataViewer, BnCWidget, TagPanelWidget
 from ...tools.lazy_stack import stack_projection
 
 
@@ -47,6 +47,12 @@ class AnalysisWidget(QWidget):
             self.window._cnb_max = None
         if not hasattr(self.window, '_cnb_window'):
             self.window._cnb_window = None
+
+        # ROI tag definitions live on the window (same lifecycle as _saved_rois)
+        if not hasattr(self.window, '_roi_tags'):
+            self.window._roi_tags = []
+        # Remembered "View" coloring choice for Save Current View this session
+        self._save_view_color_mode = 'per-roi'
 
         # Track which saved ROI is currently being edited (delegated to ROI component)
         self._editing_roi_index = None
@@ -215,6 +221,10 @@ class AnalysisWidget(QWidget):
         midr_vbox.addWidget(self.bnc_widget)
         midr_vbox.addWidget(roi_tool_group)  # Add ROI tool group to right column
 
+        # --- Tag panel: groups saved ROIs under named, colored tags ---
+        self.tag_panel = TagPanelWidget(self.window)
+        midr_vbox.addWidget(self.tag_panel)
+
         
 
         midl_vbox.addStretch(0.5)
@@ -257,9 +267,8 @@ class AnalysisWidget(QWidget):
 
         # --- Bottom panel: Plot the signal of a given area ---
         bottom_panel = QHBoxLayout()
-        bottom_panel.addStretch(0)
 
-        # Create the trace plot widget
+        # Create the trace plot widget (controls bar + full-width plot)
         self.trace_plot_widget = TraceplotWidget()
         self.trace_plot_widget.set_main_window(self.window)
         bottom_panel.addWidget(self.trace_plot_widget, 1)
@@ -284,6 +293,10 @@ class AnalysisWidget(QWidget):
         # Connect ROI component signals
         self.roi_list_component.roiSelected.connect(self._on_roi_component_selected)
         self.roi_list_component.roiAdded.connect(self._on_roi_component_added)
+        # Tag panel: keep member counts current when ROIs are removed or a
+        # ROI JSON (which may carry tags) replaces the current set.
+        self.roi_list_component.roiRemoved.connect(lambda _idx: self.tag_panel.refresh())
+        self.roi_list_component.roisLoaded.connect(self.tag_panel.refresh)
         
         # Connect new Shift+RightClick signal
         if hasattr(self, 'roi_tool'):
@@ -293,10 +306,18 @@ class AnalysisWidget(QWidget):
         self.roi_list_widget = self.roi_list_component.get_list_widget()
 
         # --- Assemble layouts ---
-        main_hbox.addLayout(left_vbox, 1) 
+        # Wrap the right-hand controls (Z-projections, BnC, ROI tool) in a
+        # width-capped container so they no longer hog horizontal space. The
+        # freed width flows to the (stretch-2) image panel, whose label is
+        # centre-aligned, so the loaded TIFF sits centred.
+        midr_container = QWidget()
+        midr_container.setLayout(midr_vbox)
+        midr_container.setMaximumWidth(250)
+
+        main_hbox.addLayout(left_vbox, 1)
         main_hbox.addLayout(midl_vbox, 0)
         main_hbox.addLayout(display_panel, 2)
-        main_hbox.addLayout(midr_vbox, 0)
+        main_hbox.addWidget(midr_container, 0)
         main_hbox.addWidget(self.roi_list_component, 0)
 
 
@@ -336,6 +357,9 @@ class AnalysisWidget(QWidget):
             self.window.trace_canvas = self.trace_canvas
             self.window.trace_plot_widget = self.trace_plot_widget  # Expose the new trace plot widget
             self.window.roi_list_widget = self.roi_list_widget
+            self.window.roi_list_component = self.roi_list_component
+            self.window.tag_panel = self.tag_panel
+            self.window.analysis_widget = self
             # Expose moved analysis methods for backward compatibility
             self.window.display_reg_tif_image = self.display_reg_tif_image
             self.window.update_tif_frame = self.update_tif_frame
@@ -1456,15 +1480,53 @@ class AnalysisWidget(QWidget):
         # Sync the internal flag
         self._show_time_in_seconds = self.trace_plot_widget._show_time_in_seconds
 
+    def _render_native_export_pixmap(self, *, color_mode='per-roi', emphasize_tag=None):
+        """Render the current view at native image resolution with ROIs baked in.
+
+        Returns a QPixmap whose pixel grid equals the image pixel grid, so stored
+        ROI coordinates map 1:1 onto the exported pixels (no display rescale).
+        Returns None if no native image data is available (caller falls back).
+
+        `color_mode='per-tag'` strokes ROIs in their tag colors (numbering
+        unchanged); `emphasize_tag` dims every ROI not in that tag.
+        """
+        from PyQt6.QtGui import QImage, QPixmap
+
+        data = self.image_view.get_current_image_data() if hasattr(self, 'image_view') else None
+        arr = data.get('numpy_array') if data else None
+        if arr is None or getattr(arr, 'size', 0) == 0 or arr.ndim != 3:
+            return None
+
+        h, w = arr.shape[0], arr.shape[1]
+        # Build an RGB QImage at native resolution (arr is a contiguous RGB copy).
+        rgb = np.ascontiguousarray(arr[..., :3])
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg.copy())  # copy() detaches from the numpy buffer
+
+        # Bake ROIs at native scale (image coords land 1:1 on the pixels).
+        if hasattr(self, 'roi_tool'):
+            pixmap = self.roi_tool.render_rois_to_pixmap(
+                pixmap, w, h, color_mode=color_mode, emphasize_tag=emphasize_tag)
+
+        # Scale bar, if the user has it enabled (drawn at native scale_factor == 1).
+        if getattr(self, 'scale_bar_checkbox', None) is not None and self.scale_bar_checkbox.isChecked():
+            metadata = getattr(self, '_exp_data', None)
+            if metadata is not None:
+                pixel_size = self.image_view.get_pixel_size_from_metadata(metadata)
+                if pixel_size:
+                    pixmap = self.image_view.draw_scale_bar(pixmap, pixel_size, w, h)
+
+        return pixmap
+
     def _save_current_view(self):
         """Save the current displayed image with ROIs as a PNG or JPG file."""
         try:
-            # Get the current pixmap from the image label (this includes all overlays)
-            current_pixmap = self.reg_tif_label.pixmap()
-            if current_pixmap is None:
+            # Cheap availability check; the actual render happens after the
+            # dialog so it can honor the chosen "View" coloring mode.
+            if self.reg_tif_label.pixmap() is None:
                 QMessageBox.warning(self, "No Image", "No image is currently displayed to save.")
                 return
-            
+
             # Generate default filename with timestamp and directory info
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             
@@ -1492,16 +1554,54 @@ class AnalysisWidget(QWidget):
             else:
                 default_path = default_filename
             
-            # Open save file dialog with format selection
-            file_path, selected_filter = QFileDialog.getSaveFileName(
-                self,
-                "Save Current View",
-                default_path,
-                "PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)"
-            )
-            
-            if not file_path:
+            # Open save file dialog with format selection. Use an explicit
+            # QFileDialog (not the static helper) so it gets the themed,
+            # high-contrast back/forward/up navigation arrows.
+            from ...theme.dialogs import style_file_dialog
+            file_dialog = QFileDialog(self)
+            file_dialog.setWindowTitle("Save Current View")
+            file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+            file_dialog.setNameFilters(
+                ["PNG Files (*.png)", "JPEG Files (*.jpg)", "All Files (*)"])
+            if default_path:
+                file_dialog.selectFile(default_path)
+            style_file_dialog(file_dialog)
+
+            # When tags exist, offer a "View" coloring choice inside the save
+            # dialog (it is non-native, so its QGridLayout accepts extra rows):
+            # Per-ROI keeps each ROI's own color; Per-Tag strokes ROIs in
+            # their tag colors (numbering unchanged, untagged in gray).
+            view_combo = None
+            if getattr(self.window, '_roi_tags', None):
+                grid = file_dialog.layout()
+                if isinstance(grid, QGridLayout):
+                    view_combo = QComboBox()
+                    view_combo.addItems(["Per-ROI colors", "Per-Tag colors"])
+                    view_combo.setCurrentIndex(
+                        1 if self._save_view_color_mode == 'per-tag' else 0)
+                    row = grid.rowCount()
+                    grid.addWidget(QLabel("View:"), row, 0)
+                    grid.addWidget(view_combo, row, 1)
+
+            if not file_dialog.exec():
                 return  # User cancelled
+            file_path = file_dialog.selectedFiles()[0]
+            selected_filter = file_dialog.selectedNameFilter()
+
+            if view_combo is not None:
+                self._save_view_color_mode = (
+                    'per-tag' if view_combo.currentIndex() == 1 else 'per-roi')
+
+            # Render at native resolution so ROIs map 1:1 onto the exported
+            # pixels; fall back to the on-screen (scaled) pixmap if native
+            # data is missing (fallback ignores the per-tag coloring mode).
+            current_pixmap = self._render_native_export_pixmap(
+                color_mode=self._save_view_color_mode)
+            if current_pixmap is None:
+                current_pixmap = self.reg_tif_label.pixmap()
+            if current_pixmap is None:
+                QMessageBox.warning(self, "No Image", "No image is currently displayed to save.")
+                return
             
             # Determine format from selected filter or file extension
             format_type = "PNG"  # Default
@@ -1716,18 +1816,25 @@ class AnalysisWidget(QWidget):
             if hasattr(self, 'roi_list_component'):
                 self.roi_list_component.clear_editing_state()
             
+            # Clear tags along with the ROIs they referenced
+            self.window._roi_tags = []
+
             # Update the ROI tool
             if hasattr(self, 'roi_tool') and self.roi_tool is not None:
+                self.roi_tool.set_highlighted_tag(None)
                 self.roi_tool.set_saved_rois([])
                 if hasattr(self.roi_tool, 'clear_selection'):
                     self.roi_tool.clear_selection()
                 else:
                     self.roi_tool.clear()
                 self.roi_tool._paint_overlay()
-            
+
+            if hasattr(self, 'tag_panel'):
+                self.tag_panel.refresh()
+
             # Clear the current selection and trace
             self._clear_roi_and_trace()
-            
+
             print("DEBUG: All ROIs cleared")
 
     def _get_current_directory_path(self):
@@ -1824,6 +1931,13 @@ class AnalysisWidget(QWidget):
         if hasattr(self, 'roi_tool') and self.roi_tool:
             try:
                 self.roi_tool.set_saved_rois(getattr(self.window, '_saved_rois', []))
+            except Exception:
+                pass
+
+        # Stim ROI dicts (and any tag memberships on them) are gone; update counts
+        if hasattr(self, 'tag_panel'):
+            try:
+                self.tag_panel.refresh()
             except Exception:
                 pass
 

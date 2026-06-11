@@ -5,6 +5,9 @@ from typing import Optional
 import numpy as np
 import math
 
+# Stroke color for ROIs without a tag when exporting in per-tag color mode.
+UNTAGGED_COLOR = (150, 150, 150, 200)
+
 
 class CircleRoiTool(QObject):
     """Ellipse/Freehand/Rectangular ROI tool attached to a QLabel showing a scaled pixmap.
@@ -83,6 +86,12 @@ class CircleRoiTool(QObject):
         self._selected_roi_indices = []  # List of indices of selected ROIs
         self._multi_roi_origins = None  # Dict storing original positions during multi-ROI drag
         self._multi_roi_drag_offset = None # QPointF storing current drag offset
+
+        # Tag support: definitions pushed from the tag panel and the name of
+        # the tag whose member ROIs should be highlighted. Both are name-based
+        # (resolved at paint time) so they can never hold stale ROI indices.
+        self._roi_tags = []        # list of {'name': str, 'color': (r,g,b,a)}
+        self._highlighted_tag = None  # tag name or None
 
     def set_draw_rect(self, rect: QRect):
         """Rectangle where the scaled pixmap is drawn inside the label."""
@@ -963,7 +972,9 @@ class CircleRoiTool(QObject):
                         
                         # Check if this ROI is selected
                         is_selected = idx in self._selected_roi_indices
-                        
+                        is_tag_hl = (self._highlighted_tag is not None
+                                     and saved.get('tag') == self._highlighted_tag)
+
                         # determine color - use brighter/thicker pen for selected ROIs
                         col = saved.get('color')
                         if isinstance(col, QColor):
@@ -973,12 +984,19 @@ class CircleRoiTool(QObject):
                             qcol = QColor(int(col[0]), int(col[1]), int(col[2]), int(a))
                         else:
                             qcol = QColor(200, 100, 10, 200)
-                        
+
                         # Highlight selected ROIs with thicker, brighter border
                         if is_selected:
                             # Use a brighter version of the ROI's own color
                             spen = QPen(qcol.lighter(150))
                             spen.setColor(QColor(spen.color().red(), spen.color().green(), spen.color().blue(), 255)) # Ensure opaque
+                            spen.setWidth(5)
+                        elif is_tag_hl:
+                            # Stroke in the tag's color so the highlight also
+                            # communicates which tag is active.
+                            tag_col = self._tag_qcolor(self._highlighted_tag)
+                            hl = tag_col if tag_col is not None else qcol.lighter(150)
+                            spen = QPen(QColor(hl.red(), hl.green(), hl.blue(), 255))
                             spen.setWidth(5)
                         else:
                             spen = QPen(qcol)
@@ -1057,8 +1075,6 @@ class CircleRoiTool(QObject):
                             else:
                                 # Fallback for non-standard names
                                 text = str(idx + 1)
-                            # choose text color that contrasts (white text)
-                            text_col = QColor(255, 255, 255)
                             fm = painter.fontMetrics()
                             tw = fm.horizontalAdvance(text)
                             ascent = fm.ascent()
@@ -1066,17 +1082,9 @@ class CircleRoiTool(QObject):
                             text_x = int(round(tx - tw / 2.0))
                             # baseline must be offset so text vertically centers on the ellipse
                             text_y = int(round(ty + (ascent - descent) / 2.0))
-                            
-                            # Draw black background rectangle for better contrast
-                            bg_padding = 2
-                            bg_rect_x = text_x - bg_padding
-                            bg_rect_y = text_y - ascent - bg_padding
-                            bg_rect_w = tw + 2 * bg_padding
-                            bg_rect_h = ascent + descent + 2 * bg_padding
-                            painter.fillRect(bg_rect_x, bg_rect_y, bg_rect_w, bg_rect_h, QColor(0, 0, 0, 180))
-                            
-                            painter.setPen(QPen(text_col))
-                            painter.drawText(text_x, text_y, text)
+                            # Halo text: readable on any image without a box
+                            # covering the ROI outline.
+                            self._draw_halo_text(painter, text_x, text_y, text)
                     except Exception:
                         continue
             except Exception:
@@ -1181,7 +1189,6 @@ class CircleRoiTool(QObject):
                         if getattr(self, '_show_labels', True):
                             tx = float(px0 + lw / 2.0)
                             ty = float(py0 + lh / 2.0)
-                            text_col = QColor(255, 255, 255)  # White text
                             stim_name = stim_roi.get('name', f"S{stim_roi.get('id', '?')}")
                             fm = painter.fontMetrics()
                             tw = fm.horizontalAdvance(stim_name)
@@ -1189,17 +1196,9 @@ class CircleRoiTool(QObject):
                             descent = fm.descent()
                             text_x = int(round(tx - tw / 2.0))
                             text_y = int(round(ty + (ascent - descent) / 2.0))
-                            
-                            # Draw black background rectangle for better contrast
-                            bg_padding = 2
-                            bg_rect_x = text_x - bg_padding
-                            bg_rect_y = text_y - ascent - bg_padding
-                            bg_rect_w = tw + 2 * bg_padding
-                            bg_rect_h = ascent + descent + 2 * bg_padding
-                            painter.fillRect(bg_rect_x, bg_rect_y, bg_rect_w, bg_rect_h, QColor(0, 0, 0, 180))
-                            
-                            painter.setPen(QPen(text_col))
-                            painter.drawText(text_x, text_y, stim_name)
+                            # Halo text: readable on any image without a box
+                            # covering the stim ROI outline.
+                            self._draw_halo_text(painter, text_x, text_y, stim_name)
                     except Exception:
                         continue
             except Exception:
@@ -1232,6 +1231,200 @@ class CircleRoiTool(QObject):
 
         painter.end()
         self._label.setPixmap(overlay)
+
+    def render_rois_to_pixmap(self, base_pixmap, img_w, img_h, *,
+                              include_current=False, show_labels=None,
+                              color_mode='per-roi', emphasize_tag=None,
+                              dim_alpha=70):
+        """Composite saved + stimulus ROIs onto a copy of `base_pixmap`.
+
+        Unlike _paint_overlay (which targets the on-screen scaled label pixmap),
+        this maps each ROI's stored image-coordinate geometry directly onto
+        `base_pixmap` using the pixmap-to-image scale, WITHOUT touching the live
+        draw_rect / label state. Pass a native-resolution image pixmap to get an
+        export where ROI coordinates land 1:1 on the exported pixels.
+
+        `color_mode='per-tag'` strokes each ROI in its tag's color (untagged
+        ROIs in neutral gray) while keeping per-ROI numbering. `emphasize_tag`
+        renders that tag's members fully opaque and every other ROI (saved and
+        stimulus, outlines and labels) at `dim_alpha`.
+
+        Returns a new QPixmap; on any failure returns the unmodified input.
+        """
+        if base_pixmap is None or img_w <= 0 or img_h <= 0:
+            return base_pixmap
+        if show_labels is None:
+            show_labels = getattr(self, '_show_labels', True)
+
+        try:
+            out = QPixmap(base_pixmap)
+            sx = out.width() / float(img_w)
+            sy = out.height() / float(img_h)
+            # Pen/font scale so outlines stay visible at native resolution.
+            pen_w = max(1, int(round(min(out.width(), out.height()) / 170.0)))
+            font_pt = max(6, int(round(min(out.width(), out.height()) / 60.0)))
+
+            painter = QPainter(out)
+            try:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                font = QFont()
+                font.setPointSize(font_pt)
+                font.setBold(True)
+                painter.setFont(font)
+
+                # --- Saved ROIs ---
+                if getattr(self, '_show_saved_rois', True):
+                    for idx, saved in enumerate(list(self._saved_rois or [])):
+                        color_override = None
+                        alpha_override = None
+                        if color_mode == 'per-tag':
+                            tag_col = self._tag_qcolor(saved.get('tag'))
+                            color_override = (tag_col if tag_col is not None
+                                              else QColor(*UNTAGGED_COLOR))
+                        if emphasize_tag is not None:
+                            alpha_override = (255 if saved.get('tag') == emphasize_tag
+                                              else dim_alpha)
+                        self._render_one_roi(painter, saved, idx, sx, sy, pen_w,
+                                             show_labels, stim=False,
+                                             color_override=color_override,
+                                             alpha_override=alpha_override)
+
+                # --- Stimulus ROIs ---
+                if getattr(self, '_show_stim_rois', True):
+                    stim_alpha = dim_alpha if emphasize_tag is not None else None
+                    for stim in list(self._stim_rois or []):
+                        self._render_one_roi(painter, stim, None, sx, sy, pen_w,
+                                             show_labels, stim=True,
+                                             alpha_override=stim_alpha)
+
+                # --- Current (un-saved) bbox, if requested ---
+                if include_current and self._bbox is not None:
+                    xyxy = self._current_roi_image_coords()
+                    if xyxy is not None:
+                        cur = {'xyxy': xyxy, 'color': (255, 255, 0, 200),
+                               'type': self._drawing_mode,
+                               'rotation': self._rotation_angle,
+                               'points': self.get_freehand_points_image_coords()}
+                        self._render_one_roi(painter, cur, None, sx, sy, pen_w,
+                                             False, stim=False)
+            finally:
+                painter.end()
+            return out
+        except Exception as e:
+            print(f"DEBUG: render_rois_to_pixmap failed: {e}")
+            return base_pixmap
+
+    def _render_one_roi(self, painter, roi, idx, sx, sy, pen_w, show_labels, stim,
+                        color_override=None, alpha_override=None):
+        """Draw a single ROI (image coords) onto `painter` scaled by (sx, sy)."""
+        xyxy = roi.get('xyxy')
+        if xyxy is None:
+            return
+        try:
+            X0, Y0, X1, Y1 = xyxy
+        except Exception:
+            return
+
+        px0 = float(X0) * sx
+        py0 = float(Y0) * sy
+        pw = max(1.0, (float(X1) - float(X0)) * sx)
+        ph = max(1.0, (float(Y1) - float(Y0)) * sy)
+        rotation_angle = roi.get('rotation', 0.0)
+        roi_type = roi.get('type', 'circular')
+
+        if stim:
+            qcol = QColor(0, 200, 255, 220)
+        else:
+            col = roi.get('color')
+            if isinstance(col, QColor):
+                qcol = QColor(col)
+            elif isinstance(col, (tuple, list)) and len(col) >= 3:
+                a = col[3] if len(col) > 3 else 200
+                qcol = QColor(int(col[0]), int(col[1]), int(col[2]), int(a))
+            else:
+                qcol = QColor(200, 100, 10, 200)
+        if color_override is not None:
+            qcol = QColor(color_override)
+        if alpha_override is not None:
+            qcol.setAlpha(int(alpha_override))
+        pen = QPen(qcol)
+        if stim:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setWidth(pen_w)
+        painter.setPen(pen)
+
+        if roi_type == 'freehand' and roi.get('points'):
+            polygon = QPolygonF()
+            for img_x, img_y in roi['points']:
+                polygon.append(QPointF(float(img_x) * sx, float(img_y) * sy))
+            if len(polygon) >= 3:
+                painter.drawPolygon(polygon)
+        elif roi_type == 'rectangular':
+            self._draw_shape(painter, px0, py0, pw, ph, rotation_angle, ellipse=False)
+        else:
+            self._draw_shape(painter, px0, py0, pw, ph, rotation_angle, ellipse=True)
+
+        if show_labels:
+            name = roi.get('name', '')
+            if stim:
+                text = name or f"S{roi.get('id', '?')}"
+            elif name.startswith('S'):
+                text = name
+            elif name.startswith('ROI '):
+                try:
+                    text = name.split('ROI ')[1]
+                except (IndexError, ValueError):
+                    text = str((idx or 0) + 1)
+            else:
+                text = str((idx or 0) + 1)
+            label_alpha = 255 if alpha_override is None else int(alpha_override)
+            self._draw_label(painter, px0 + pw / 2.0, py0 + ph / 2.0, text,
+                             alpha=label_alpha)
+
+    def _draw_shape(self, painter, px0, py0, w, h, rotation_angle, *, ellipse):
+        """Draw an (optionally rotated) ellipse or rectangle at pixmap coords."""
+        if rotation_angle:
+            painter.save()
+            painter.translate(px0 + w / 2.0, py0 + h / 2.0)
+            painter.rotate(math.degrees(rotation_angle))
+            if ellipse:
+                painter.drawEllipse(int(round(-w / 2)), int(round(-h / 2)),
+                                    int(round(w)), int(round(h)))
+            else:
+                painter.drawRect(int(round(-w / 2)), int(round(-h / 2)),
+                                 int(round(w)), int(round(h)))
+            painter.restore()
+        else:
+            if ellipse:
+                painter.drawEllipse(int(round(px0)), int(round(py0)),
+                                    int(round(w)), int(round(h)))
+            else:
+                painter.drawRect(int(round(px0)), int(round(py0)),
+                                 int(round(w)), int(round(h)))
+
+    def _draw_label(self, painter, cx, cy, text, alpha=255):
+        """Draw a centered halo label (no backing box) at pixmap coords."""
+        fm = painter.fontMetrics()
+        tw = fm.horizontalAdvance(text)
+        ascent = fm.ascent()
+        descent = fm.descent()
+        text_x = int(round(cx - tw / 2.0))
+        text_y = int(round(cy + (ascent - descent) / 2.0))
+        self._draw_halo_text(painter, text_x, text_y, text, alpha=alpha)
+
+    def _draw_halo_text(self, painter, x, y, text, alpha=255):
+        """Draw white text with a thin dark halo instead of a backing rectangle.
+
+        The halo keeps labels readable over any image content while letting the
+        ROI outlines and image show through around the glyphs. `alpha` dims the
+        label along with its ROI (e.g. non-members in a tag-emphasis export).
+        """
+        painter.setPen(QPen(QColor(0, 0, 0, min(200, alpha))))
+        for dx, dy in ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)):
+            painter.drawText(x + dx, y + dy, text)
+        painter.setPen(QPen(QColor(255, 255, 255, alpha)))
+        painter.drawText(x, y, text)
 
     def show_bbox_image_coords(self, xyxy, rotation_angle=0.0):
         """Draw the stored bbox given in IMAGE coordinates (x0,y0,x1,y1).
@@ -1310,6 +1503,32 @@ class CircleRoiTool(QObject):
                 self._saved_rois = list(saved_rois)
         except Exception:
             self._saved_rois = []
+
+    def set_roi_tags(self, tags):
+        """Provide the tag definitions [{'name', 'color'}] used for tag
+        highlighting and per-tag export coloring."""
+        try:
+            self._roi_tags = list(tags) if tags else []
+        except Exception:
+            self._roi_tags = []
+
+    def set_highlighted_tag(self, tag_name):
+        """Highlight every saved ROI whose 'tag' equals `tag_name` (None clears)."""
+        self._highlighted_tag = tag_name
+        if self._base_pixmap is not None:
+            self._paint_overlay()
+
+    def _tag_qcolor(self, tag_name):
+        """Return the QColor for a tag name, or None if no such tag exists."""
+        if not tag_name:
+            return None
+        for tag in self._roi_tags:
+            if tag.get('name') == tag_name:
+                col = tag.get('color')
+                if isinstance(col, (tuple, list)) and len(col) >= 3:
+                    a = col[3] if len(col) > 3 else 220
+                    return QColor(int(col[0]), int(col[1]), int(col[2]), int(a))
+        return None
 
     def set_show_mode_text(self, show: bool):
         """Externally control whether the small mode text is shown in the overlay."""

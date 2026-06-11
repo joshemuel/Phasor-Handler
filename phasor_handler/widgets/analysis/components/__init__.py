@@ -4,6 +4,7 @@ from .circle_roi import CircleRoiTool
 from .roi_list import RoiListWidget
 from .meta_info import MetadataViewer
 from .bnc import BnCWidget
+from .tag_panel import TagPanelWidget
 
-__all__ = ['ImageViewWidget', 'TraceplotWidget', 'CircleRoiTool', 'RoiListWidget', 'MetadataViewer', 'BnCWidget']
+__all__ = ['ImageViewWidget', 'TraceplotWidget', 'CircleRoiTool', 'RoiListWidget', 'MetadataViewer', 'BnCWidget', 'TagPanelWidget']
 

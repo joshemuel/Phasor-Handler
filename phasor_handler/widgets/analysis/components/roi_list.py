@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF
 from phasor_handler.tools.misc import load_or_create_experiment_metadata, resolve_timestamps
+from phasor_handler.theme.dialogs import style_file_dialog
 
 
 class RoiListWidget(QWidget):
@@ -30,6 +31,7 @@ class RoiListWidget(QWidget):
     roiAdded = pyqtSignal(dict)     # Emitted when a new ROI is added
     roiRemoved = pyqtSignal(int)    # Emitted when a ROI is removed (index)
     roiUpdated = pyqtSignal(int, dict)  # Emitted when an existing ROI is updated
+    roisLoaded = pyqtSignal()       # Emitted after ROIs (and tags) are loaded from JSON
     
     def __init__(self, main_window):
         super().__init__()
@@ -455,7 +457,8 @@ class RoiListWidget(QWidget):
         file_dialog.setWindowTitle("Load ROI Positions")
         file_dialog.setNameFilter("JSON files (*.json)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        
+        style_file_dialog(file_dialog)  # high-contrast back/forward/up nav arrows
+
         # Set the default directory if available
         if default_dir:
             file_dialog.setDirectory(default_dir)
@@ -472,16 +475,26 @@ class RoiListWidget(QWidget):
             # Support both formats: list (legacy) and dict with _capture_name + rois
             if isinstance(loaded_data, dict):
                 loaded_rois = loaded_data.get('rois', [])
+                loaded_tags = loaded_data.get('tags', [])
             else:
                 loaded_rois = loaded_data
-            
+                loaded_tags = []
+
+            # Loading replaces tags, matching how it replaces ROIs. Legacy
+            # files (no 'tags' key) simply yield an empty tag list.
+            self.main_window._roi_tags = [
+                {'name': str(t['name']), 'color': tuple(t.get('color', (200, 200, 200, 220)))}
+                for t in loaded_tags if isinstance(t, dict) and t.get('name')
+            ]
+            known_tag_names = {t['name'] for t in self.main_window._roi_tags}
+
             # Clear existing ROIs
             if not hasattr(self.main_window, '_saved_rois'):
                 self.main_window._saved_rois = []
-            
+
             self.roi_list_widget.clear()
             self.main_window._saved_rois.clear()
-            
+
             # Add loaded ROIs
             for roi in loaded_rois:
                 # Ensure required fields exist with defaults
@@ -489,7 +502,22 @@ class RoiListWidget(QWidget):
                     roi['name'] = f"ROI {len(self.main_window._saved_rois) + 1}"
                 if 'color' not in roi:
                     roi['color'] = (255, 255, 0, 200)  # Default yellow
-                
+
+                # Sanitize tag membership: drop garbage values, auto-create a
+                # definition for unknown names (forgiving to hand-edited files)
+                if 'tag' in roi:
+                    if not isinstance(roi['tag'], str) or not roi['tag']:
+                        roi.pop('tag')
+                    elif roi['tag'] not in known_tag_names:
+                        from .tag_panel import TAG_PALETTE
+                        used = {tuple(t['color']) for t in self.main_window._roi_tags}
+                        color = next((c for c in TAG_PALETTE if c not in used),
+                                     TAG_PALETTE[len(self.main_window._roi_tags)
+                                                 % len(TAG_PALETTE)])
+                        self.main_window._roi_tags.append(
+                            {'name': roi['tag'], 'color': color})
+                        known_tag_names.add(roi['tag'])
+
                 # Handle ROI type - determine if circular or freehand
                 if 'type' not in roi:
                     # Auto-detect type based on presence of 'points' or 'rotation'
@@ -499,16 +527,20 @@ class RoiListWidget(QWidget):
                         roi['type'] = 'circular'
                         if 'rotation' not in roi:
                             roi['rotation'] = 0.0
-                    
+
                 self.main_window._saved_rois.append(roi)
                 self.roi_list_widget.addItem(roi['name'])
-            
+
             # Update ROI tool
             if hasattr(self.main_window, 'roi_tool') and self.main_window.roi_tool:
+                # Any previously highlighted tag may not exist anymore
+                self.main_window.roi_tool.set_highlighted_tag(None)
                 self.main_window.roi_tool.set_saved_rois(self.main_window._saved_rois)
                 self.main_window.roi_tool._paint_overlay()
-            
-            QMessageBox.information(self, "Load Complete", 
+
+            self.roisLoaded.emit()
+
+            QMessageBox.information(self, "Load Complete",
                                   f"Successfully loaded {len(loaded_rois)} ROIs from:\n{filename}")
                                   
         except Exception as e:
@@ -540,7 +572,8 @@ class RoiListWidget(QWidget):
         file_dialog.setNameFilter("JSON files (*.json)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         file_dialog.setDefaultSuffix("json")
-        
+        style_file_dialog(file_dialog)  # high-contrast back/forward/up nav arrows
+
         # Set the default directory if available
         if default_dir and default_path:
             file_dialog.selectFile(default_path)
@@ -571,6 +604,10 @@ class RoiListWidget(QWidget):
             output = {}
             if capture_name:
                 output['_capture_name'] = capture_name
+            tags = getattr(self.main_window, '_roi_tags', None)
+            if tags:
+                output['tags'] = [{'name': t['name'], 'color': list(t['color'])}
+                                  for t in tags]
             output['rois'] = roi_list
             
             with open(filename, 'w') as f:
@@ -587,20 +624,21 @@ class RoiListWidget(QWidget):
         if not hasattr(self.main_window, '_saved_rois') or not self.main_window._saved_rois:
             QMessageBox.information(self, "No ROIs", "No ROIs to export. Please add some ROIs first.")
             return
-            
+        self.export_traces_for_rois(list(self.main_window._saved_rois))
+
+    def export_traces_for_rois(self, rois, default_filename="roi_traces.txt"):
+        """File dialog + trace extraction/export for an explicit list of ROI
+        dicts (e.g. all saved ROIs, or one tag's members)."""
         # Check if we have image data
         if not hasattr(self.main_window, '_current_tif') or self.main_window._current_tif is None:
             QMessageBox.warning(self, "No Image Data", "No image data loaded. Please load a dataset first.")
             return
-        
+
         # Get the current directory path from the analysis widget
         default_dir = None
         if hasattr(self.main_window, '_get_current_directory_path'):
             default_dir = self.main_window._get_current_directory_path()
-        
-        # Generate default filename
-        default_filename = "roi_traces.txt"
-        
+
         # Combine directory and filename for full default path
         if default_dir:
             default_path = os.path.join(default_dir, default_filename)
@@ -613,7 +651,8 @@ class RoiListWidget(QWidget):
         file_dialog.setNameFilter("Text files (*.txt)")
         file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         file_dialog.setDefaultSuffix("txt")
-        
+        style_file_dialog(file_dialog)  # high-contrast back/forward/up nav arrows
+
         # Set the default directory if available
         if default_dir and default_path:
             file_dialog.selectFile(default_path)
@@ -655,7 +694,7 @@ class RoiListWidget(QWidget):
                 formula_index = 0  # Default to first formula
             
             # Progress tracking for large datasets
-            total_work = nframes * len(self.main_window._saved_rois)
+            total_work = nframes * len(rois)
             if total_work > 1000:
                 progress = QProgressDialog("Extracting ROI data...", "Cancel", 0, total_work, self)
                 progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -669,7 +708,7 @@ class RoiListWidget(QWidget):
             roi_numbers = []
             seen_numbers = {}
             
-            for i, roi in enumerate(self.main_window._saved_rois):
+            for i, roi in enumerate(rois):
                 roi_name = roi.get('name', f'ROI {i + 1}')
                 
                 # Extract number from ROI name using regex
@@ -702,7 +741,7 @@ class RoiListWidget(QWidget):
             roi_baselines = {}
             baseline_count = max(1, int(np.ceil(nframes * 0.10)))
             
-            for i, roi in enumerate(self.main_window._saved_rois):
+            for i, roi in enumerate(rois):
                 xyxy = roi.get('xyxy')
                 if xyxy is None:
                     roi_baselines[i] = 0
@@ -782,7 +821,7 @@ class RoiListWidget(QWidget):
                 if progress is not None:
                     if progress.wasCanceled():
                         return
-                    progress.setValue(frame_idx * len(self.main_window._saved_rois))
+                    progress.setValue(frame_idx * len(rois))
                 
                 # Get frames for this timepoint
                 green_frame = tif[frame_idx]
@@ -797,7 +836,7 @@ class RoiListWidget(QWidget):
                 row_data = [str(frame_idx), f"{time_s:.6f}"]
                 
                 # Process each ROI
-                for i, roi in enumerate(self.main_window._saved_rois):
+                for i, roi in enumerate(rois):
                     xyxy = roi.get('xyxy')
                     if xyxy is None:
                         row_data.extend(["N/A", "N/A", "N/A"])
@@ -951,8 +990,8 @@ class RoiListWidget(QWidget):
                 for row in export_data:
                     f.write('\t'.join(row) + '\n')
             
-            QMessageBox.information(self, "Export Complete", 
-                                  f"Successfully exported {len(self.main_window._saved_rois)} ROIs across {nframes} frames to:\n{filename}")
+            QMessageBox.information(self, "Export Complete",
+                                  f"Successfully exported {len(rois)} ROIs across {nframes} frames to:\n{filename}")
                                   
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export ROIs:\n{str(e)}")

@@ -1,5 +1,5 @@
 """
-matplotlib styling for the Ice Cyan theme.
+matplotlib styling driven by the active theme palette.
 
 Provides three things:
   - apply_mpl_theme(): global rcParams matching the token palette.
