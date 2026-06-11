@@ -56,7 +56,27 @@ class _CheckableMenu(QMenu):
     """A QMenu that stays open when a checkable item is toggled, so several tags
     can be checked/unchecked without reopening the dropdown each time."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Tracks whether the current click's press landed inside this menu. The
+        # opening click on an InstantPopup tool button presses the *button*, then
+        # the menu pops up under the cursor and receives only the release; without
+        # this guard that stray release would toggle whatever item sits under the
+        # cursor (usually the top "(All)" item -> every tag deselected -> nothing
+        # shown). Qt's own QMenu guards on the same thing (its private mouseDown),
+        # which this override previously discarded.
+        self._press_in_menu = False
+
+    def mousePressEvent(self, event):
+        self._press_in_menu = True
+        super().mousePressEvent(event)
+
     def mouseReleaseEvent(self, event):
+        # Ignore a release whose press did not occur in this menu (the fall-through
+        # release from the click that opened the popup).
+        if not self._press_in_menu:
+            return
+        self._press_in_menu = False
         action = self.activeAction()
         if action is not None and action.isCheckable() and action.isEnabled():
             action.trigger()  # toggle + emit triggered, but keep the menu open
