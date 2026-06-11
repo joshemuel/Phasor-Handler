@@ -77,14 +77,15 @@ class TagPanelWidget(QWidget):
 
         self.tag_list_widget = QListWidget()
         self.tag_list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.tag_list_widget.setMaximumHeight(120)
+        # No height cap: the panel now lives in the tall left column and the
+        # list should expand to fill the gap above Save Current View.
         self.tag_list_widget.itemSelectionChanged.connect(self._on_tag_selection_changed)
         self.tag_list_widget.itemDoubleClicked.connect(self._on_tag_double_clicked)
-        tag_vbox.addWidget(self.tag_list_widget)
+        tag_vbox.addWidget(self.tag_list_widget, 1)
 
         grid = QGridLayout()
-        self.create_tag_btn = QPushButton("Create Tag")
-        self.delete_tag_btn = QPushButton("Delete Tag")
+        self.create_tag_btn = QPushButton("Create")
+        self.delete_tag_btn = QPushButton("Delete")
         self.assign_btn = QPushButton("Assign")
         for btn in (self.create_tag_btn, self.delete_tag_btn, self.assign_btn):
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)

@@ -217,19 +217,18 @@ class AnalysisWidget(QWidget):
         midl_vbox.addWidget(self.composite_button)
         midl_vbox.addWidget(self.view_metadata_button)
 
+        # --- Tag panel: groups saved ROIs under named, colored tags.
+        # Sits under View Metadata and is stretched to fill the gap above
+        # Save Current View. ---
+        self.tag_panel = TagPanelWidget(self.window)
+        midl_vbox.addWidget(self.tag_panel, 1)
+
         midr_vbox.addWidget(zproj_group)
         midr_vbox.addWidget(self.bnc_widget)
         midr_vbox.addWidget(roi_tool_group)  # Add ROI tool group to right column
 
-        # --- Tag panel: groups saved ROIs under named, colored tags ---
-        self.tag_panel = TagPanelWidget(self.window)
-        midr_vbox.addWidget(self.tag_panel)
-
-        
-
-        midl_vbox.addStretch(0.5)
         midr_vbox.addStretch(0.5)
-        
+
         midl_vbox.addWidget(self.save_img)
         midl_vbox.addWidget(self.scale_bar_checkbox)
 
