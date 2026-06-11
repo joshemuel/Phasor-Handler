@@ -10,6 +10,8 @@ The trace math, formula handling, baseline cap, frame-range logic, and the
 SecondLevelWorker contract are unchanged from the previous implementation.
 """
 
+import math
+
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -78,10 +80,10 @@ class _TraceCard(QFrame):
 
     clicked = pyqtSignal()
 
-    def __init__(self, roi_name, pixmap, parent=None):
+    def __init__(self, roi_name, pixmap, parent=None, card_w=CARD_W, card_h=CARD_H):
         super().__init__(parent)
         self.setObjectName("traceCard")
-        self.setFixedSize(CARD_W, CARD_H)
+        self.setFixedSize(card_w, card_h)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(f"""
             QFrame#traceCard {{
@@ -165,6 +167,13 @@ class SecondLevelWidget(QWidget):
         # Card widgets currently displayed.
         self.cards = []
 
+        # Cached traces from the last worker run, the context needed to re-render
+        # them, and the card size last used — so a resize can re-zoom a small ROI
+        # set without recomputing traces.
+        self._trace_data_list = []
+        self._render_meta = {}
+        self._card_dims = (CARD_W, CARD_H)
+
         # Guard against recursive parameter-change refreshes.
         self._updating = False
 
@@ -193,11 +202,21 @@ class SecondLevelWidget(QWidget):
         # --- Control bar ---
         control_group = QGroupBox("Display Controls")
         control_layout = QHBoxLayout()
-        control_layout.setSpacing(12)
+        control_layout.setSpacing(10)
+        # Tight margins keep the control bar short; the title eats some height so
+        # we trim the top/bottom padding the layout adds inside the group box.
+        control_layout.setContentsMargins(8, 2, 8, 4)
+
+        # Inner group boxes pile their own title + padding on top of the outer
+        # one; squeezing each inner layout keeps the whole bar compact.
+        def _compact(layout):
+            layout.setContentsMargins(8, 2, 8, 2)
+            layout.setSpacing(6)
+            return layout
 
         # Y-axis limits
         ylim_group = QGroupBox("Y-Axis Limits")
-        ylim_layout = QHBoxLayout()
+        ylim_layout = _compact(QHBoxLayout())
         ylim_layout.addWidget(QLabel("Min:"))
         self.ylim_min_edit = QDoubleSpinBox()
         self.ylim_min_edit.setRange(-999999.99, 999999.99)
@@ -220,7 +239,7 @@ class SecondLevelWidget(QWidget):
 
         # Frame range
         frame_group = QGroupBox("Frame Range")
-        frame_layout = QHBoxLayout()
+        frame_layout = _compact(QHBoxLayout())
         frame_layout.addWidget(QLabel("Start:"))
         self.frame_start_edit = QSpinBox()
         self.frame_start_edit.setRange(0, 999999)
@@ -240,7 +259,7 @@ class SecondLevelWidget(QWidget):
 
         # Formula
         formula_group = QGroupBox("Formula")
-        formula_layout = QHBoxLayout()
+        formula_layout = _compact(QHBoxLayout())
         self.formula_dropdown = QComboBox()
         self.formula_dropdown.addItem("Fg - Fog / Fr")
         self.formula_dropdown.addItem("Fg - Fog / Fog")
@@ -253,7 +272,7 @@ class SecondLevelWidget(QWidget):
 
         # Baseline
         baseline_group = QGroupBox("Baseline")
-        baseline_layout = QHBoxLayout()
+        baseline_layout = _compact(QHBoxLayout())
         baseline_layout.addWidget(QLabel("Baseline (s):"))
         self.baseline_spinbox = QDoubleSpinBox()
         c_locale = QLocale(QLocale.Language.C)
@@ -336,7 +355,7 @@ class SecondLevelWidget(QWidget):
         self.scroll_area.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_content = QWidget()
-        self.flow_layout = FlowLayout(margin=4, spacing=14)
+        self.flow_layout = FlowLayout(margin=4, spacing=14, center=True)
         self.scroll_content.setLayout(self.flow_layout)
         self.scroll_area.setWidget(self.scroll_content)
         main_layout.addWidget(self.scroll_area, 1)
@@ -601,6 +620,8 @@ class SecondLevelWidget(QWidget):
     def _show_message(self, text, danger=False):
         """Show a centered empty/error message and hide the card grid."""
         self._clear_cards()
+        # Drop the cached traces so a later resize can't repopulate over the message.
+        self._trace_data_list = []
         color = tokens.DANGER if danger else tokens.MUTED
         self.message_label.setStyleSheet(
             f"color: {color}; font-size: 15px; padding: 40px;")
@@ -618,6 +639,9 @@ class SecondLevelWidget(QWidget):
         """Recompute traces (full ROI set) and rebuild the card grid."""
         self._stop_worker()
         self._clear_cards()
+        # Stale until the new worker delivers; prevents a resize mid-compute from
+        # repopulating the grid with the previous run's traces.
+        self._trace_data_list = []
 
         all_rois = getattr(self.window, '_saved_rois', [])
         if not all_rois:
@@ -740,28 +764,93 @@ class SecondLevelWidget(QWidget):
 
     def _on_worker_finished(self, trace_data_list):
         self.progress_bar.setVisible(False)
-        params = self._render_params
-        frame_start = params['frame_start']
-        frame_end = params['frame_end']
-        ymin = params['ymin']
-        ymax = params['ymax']
-        ylabel = _formula_ylabel(self.formula_dropdown.currentIndex())
-        stim_frames = self._get_stimulation_frames() if self.show_stim_checkbox.isChecked() else None
+        # Cache the computed traces + their render context so we can re-render the
+        # cards (e.g. to re-zoom a small ROI set) without recomputing on the worker.
+        self._trace_data_list = trace_data_list
+        self._render_meta = {
+            'frame_start': self._render_params['frame_start'],
+            'frame_end': self._render_params['frame_end'],
+            'ymin': self._render_params['ymin'],
+            'ymax': self._render_params['ymax'],
+            'ylabel': _formula_ylabel(self.formula_dropdown.currentIndex()),
+            'stim_frames': (self._get_stimulation_frames()
+                            if self.show_stim_checkbox.isChecked() else None),
+        }
+        self._populate_cards()
+
+    def _compute_card_dims(self, n):
+        """Pick the card size for `n` cards. Many ROIs use the base size and scroll;
+        a small set is zoomed up to fill the viewport (capped so a lone ROI doesn't
+        balloon). Returns (card_w, card_h, plot_w, plot_h)."""
+        if n <= 0:
+            return CARD_W, CARD_H, PLOT_W, PLOT_H
+
+        viewport = self.scroll_area.viewport()
+        vw = viewport.width()
+        vh = viewport.height()
+        spacing = self.flow_layout._spacing
+        margins = self.flow_layout.contentsMargins()
+        avail_w = vw - margins.left() - margins.right()
+        avail_h = vh - margins.top() - margins.bottom()
+        if avail_w <= CARD_W or avail_h <= CARD_H:
+            return CARD_W, CARD_H, PLOT_W, PLOT_H
+
+        # Cap the zoom so one or two ROIs grow to a comfortable size, not the whole
+        # screen; keep the base card's aspect ratio while scaling.
+        MAX_SCALE = 2.2
+        aspect = CARD_H / CARD_W
+        best_w = float(CARD_W)
+        best_area = 0.0
+        for ncols in range(1, n + 1):
+            nrows = math.ceil(n / ncols)
+            cw = (avail_w - spacing * (ncols - 1)) / ncols
+            ch = cw * aspect
+            if nrows * ch + spacing * (nrows - 1) > avail_h:
+                continue  # this column count overflows the viewport vertically
+            cw = min(cw, CARD_W * MAX_SCALE)
+            if cw < CARD_W:
+                continue  # never shrink below the base size
+            area = cw * (cw * aspect)
+            if area > best_area:
+                best_area = area
+                best_w = cw
+
+        scale = best_w / CARD_W
+        return (int(best_w), int(best_w * aspect),
+                int(PLOT_W * scale), int(PLOT_H * scale))
+
+    def _populate_cards(self):
+        """(Re)build the card grid from the cached traces at a size chosen for the
+        current ROI count and viewport, so a few ROIs render large and centered."""
+        if not getattr(self, '_trace_data_list', None):
+            return
+        self._clear_cards()
+        meta = self._render_meta
+        frame_start = meta['frame_start']
+        frame_end = meta['frame_end']
+        ymin = meta['ymin']
+        ymax = meta['ymax']
+        ylabel = meta['ylabel']
+        stim_frames = meta['stim_frames']
         dpr = self.devicePixelRatioF()
 
+        card_w, card_h, plot_w, plot_h = self._compute_card_dims(
+            len(self._trace_data_list))
+        self._card_dims = (card_w, card_h)
+
         self._show_grid()
-        for trace_data in trace_data_list:
+        for trace_data in self._trace_data_list:
             roi_data = trace_data['roi_data']
             roi_idx = trace_data['roi_idx']
             trace = trace_data['trace']
             roi_name = roi_data.get('name', f'ROI {roi_idx + 1}')
 
             pixmap = render_trace_pixmap(
-                trace, width_px=PLOT_W, height_px=PLOT_H, device_pixel_ratio=dpr,
+                trace, width_px=plot_w, height_px=plot_h, device_pixel_ratio=dpr,
                 frame_start=frame_start, frame_end=frame_end,
                 ymin=ymin, ymax=ymax, stim_frames=stim_frames, ylabel=ylabel,
             )
-            card = _TraceCard(roi_name, pixmap)
+            card = _TraceCard(roi_name, pixmap, card_w=card_w, card_h=card_h)
             # Bind current values for the detail view via default args.
             card.clicked.connect(
                 lambda _=False, rn=roi_name, tr=trace, fs=frame_start, fe=frame_end,
@@ -770,7 +859,7 @@ class SecondLevelWidget(QWidget):
             self.flow_layout.addWidget(card)
             self.cards.append(card)
 
-        self.count_label.setText(f"{len(trace_data_list)} ROIs")
+        self.count_label.setText(f"{len(self._trace_data_list)} ROIs")
 
     def _open_detail(self, roi_name, trace, frame_start, frame_end, ymin, ymax,
                      stim_frames, ylabel):
@@ -781,6 +870,17 @@ class SecondLevelWidget(QWidget):
         dialog.show()
 
     # --------------------------------------------------------------- events
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Re-zoom a small ROI set to the new viewport. Only re-render when the
+        # chosen card size actually changes — for large (base-size, scrolling)
+        # sets the size is unchanged, so this is a no-op and we avoid thrashing.
+        if not self._trace_data_list:
+            return
+        new_dims = self._compute_card_dims(len(self._trace_data_list))[:2]
+        if new_dims != self._card_dims:
+            self._populate_cards()
+
     def showEvent(self, event):
         super().showEvent(event)
         current_tif = getattr(self.window, '_current_tif', None)

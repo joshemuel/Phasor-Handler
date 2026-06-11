@@ -13,10 +13,15 @@ from PyQt6.QtCore import Qt, QRect, QSize, QPoint
 
 
 class FlowLayout(QLayout):
-    def __init__(self, parent=None, margin=0, spacing=12):
+    def __init__(self, parent=None, margin=0, spacing=12, center=False):
         super().__init__(parent)
         self._items = []
         self._spacing = spacing
+        # When True and the laid-out content is short enough to fit the given
+        # rect, rows are centered horizontally and the block is centered
+        # vertically. This is what makes a handful of trace cards sit zoomed and
+        # centered instead of clinging to the top-left corner.
+        self._center = center
         self.setContentsMargins(margin, margin, margin, margin)
 
     # --- required QLayout overrides ---
@@ -66,23 +71,49 @@ class FlowLayout(QLayout):
         margins = self.contentsMargins()
         effective = rect.adjusted(margins.left(), margins.top(),
                                   -margins.right(), -margins.bottom())
-        x = effective.x()
-        y = effective.y()
-        line_height = 0
         spacing = self._spacing
 
+        # First pass: group items into rows (independent of positioning) so we can
+        # measure each row's width/height and the whole block's height up front.
+        rows = []  # each: {'items': [(item, hint)], 'width': int, 'height': int}
+        cur_items = []
+        cur_w = 0
+        cur_h = 0
         for item in self._items:
             hint = item.sizeHint()
-            next_x = x + hint.width() + spacing
-            if next_x - spacing > effective.right() and line_height > 0:
-                # wrap to next row
-                x = effective.x()
-                y = y + line_height + spacing
-                next_x = x + hint.width() + spacing
-                line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
-            x = next_x
-            line_height = max(line_height, hint.height())
+            if cur_items and cur_w + hint.width() > effective.width():
+                rows.append({'items': cur_items, 'width': cur_w - spacing,
+                             'height': cur_h})
+                cur_items = []
+                cur_w = 0
+                cur_h = 0
+            cur_items.append((item, hint))
+            cur_w += hint.width() + spacing
+            cur_h = max(cur_h, hint.height())
+        if cur_items:
+            rows.append({'items': cur_items, 'width': cur_w - spacing,
+                         'height': cur_h})
 
-        return y + line_height - rect.y() + margins.bottom()
+        total_h = sum(r['height'] for r in rows)
+        if rows:
+            total_h += spacing * (len(rows) - 1)
+
+        # Center the whole block only when there's spare room (content shorter than
+        # the rect); when it exactly fills or overflows — the scrolling, many-card
+        # case — keep the natural top-left flow.
+        fits = self._center and total_h < effective.height()
+        y = effective.y()
+        if fits:
+            y += (effective.height() - total_h) // 2
+
+        for row in rows:
+            x = effective.x()
+            if fits and row['width'] < effective.width():
+                x += (effective.width() - row['width']) // 2
+            for item, hint in row['items']:
+                if not test_only:
+                    item.setGeometry(QRect(QPoint(x, y), hint))
+                x += hint.width() + spacing
+            y += row['height'] + spacing
+
+        return total_h + margins.top() + margins.bottom()

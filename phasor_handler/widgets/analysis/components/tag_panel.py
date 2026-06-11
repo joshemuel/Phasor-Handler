@@ -230,13 +230,19 @@ class TagPanelWidget(QWidget):
         self._tags().append({'name': name, 'color': self.next_palette_color()})
         for row in rows:
             self.main_window._saved_rois[row]['tag'] = name
+        # Leave no tag selected so the next Assign (T) creates another new tag,
+        # letting the user rattle off fresh tags without clicking back to "none".
+        self._clear_tag_selection()
         self._emit_changed()
 
-        # Select the new tag (triggers the highlight via itemSelectionChanged)
-        for i in range(self.tag_list_widget.count()):
-            if self.tag_list_widget.item(i).data(Qt.ItemDataRole.UserRole) == name:
-                self.tag_list_widget.setCurrentRow(i)
-                break
+    def _clear_tag_selection(self):
+        """Drop any tag selection (and its highlight), returning the panel to the
+        "no tag selected" state that makes Assign create a new tag."""
+        self.tag_list_widget.clearSelection()
+        self.tag_list_widget.setCurrentRow(-1)
+        tool = self._roi_tool()
+        if tool is not None:
+            tool.set_highlighted_tag(None)
 
     def _on_delete_tag(self):
         name = self.selected_tag_name()
@@ -274,6 +280,9 @@ class TagPanelWidget(QWidget):
             return
         for row in rows:
             self.main_window._saved_rois[row]['tag'] = name
+        # Revert to "no tag selected" after assigning so repeated Assign (T)
+        # presses keep spawning new tags rather than re-using this one.
+        self._clear_tag_selection()
         self._emit_changed()
 
     def _on_tag_selection_changed(self):
