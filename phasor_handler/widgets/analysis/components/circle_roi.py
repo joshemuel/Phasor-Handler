@@ -1235,7 +1235,7 @@ class CircleRoiTool(QObject):
     def render_rois_to_pixmap(self, base_pixmap, img_w, img_h, *,
                               include_current=False, show_labels=None,
                               color_mode='per-roi', emphasize_tag=None,
-                              dim_alpha=70):
+                              dim_alpha=115):
         """Composite saved + stimulus ROIs onto a copy of `base_pixmap`.
 
         Unlike _paint_overlay (which targets the on-screen scaled label pixmap),

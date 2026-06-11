@@ -56,6 +56,22 @@ def _swatch_icon(color, size=12):
     return QIcon(pm)
 
 
+class _DeselectableListWidget(QListWidget):
+    """Single-selection list where clicking the already-selected row clears the
+    selection. This lets the Tags panel reach a "no tag selected" state, which is
+    what makes Assign create a new tag instead of adding to an existing one."""
+
+    def mousePressEvent(self, event):
+        index = self.indexAt(event.position().toPoint())
+        if (index.isValid() and index.row() == self.currentRow()
+                and self.selectionModel().isSelected(index)):
+            self.clearSelection()
+            self.setCurrentRow(-1)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class TagPanelWidget(QWidget):
     """Widget for managing ROI tags with create/delete/assign functionality."""
 
@@ -75,7 +91,7 @@ class TagPanelWidget(QWidget):
         tag_group = QGroupBox("Tags")
         tag_vbox = QVBoxLayout()
 
-        self.tag_list_widget = QListWidget()
+        self.tag_list_widget = _DeselectableListWidget()
         self.tag_list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         # No height cap: the panel now lives in the tall left column and the
         # list should expand to fill the gap above Save Current View.
@@ -84,23 +100,21 @@ class TagPanelWidget(QWidget):
         tag_vbox.addWidget(self.tag_list_widget, 1)
 
         grid = QGridLayout()
-        self.create_tag_btn = QPushButton("Create")
-        self.delete_tag_btn = QPushButton("Delete")
         self.assign_btn = QPushButton("Assign")
-        for btn in (self.create_tag_btn, self.delete_tag_btn, self.assign_btn):
+        self.delete_tag_btn = QPushButton("Delete")
+        for btn in (self.assign_btn, self.delete_tag_btn):
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.assign_btn.setToolTip(
-            "Assign the ROIs selected in the Saved ROIs list to the selected tag")
-        grid.addWidget(self.create_tag_btn, 0, 0)
+            "Assign the ROIs selected in the Saved ROIs list to the selected tag "
+            "(T). With no tag selected, creates a new tag for them.")
+        grid.addWidget(self.assign_btn, 0, 0)
         grid.addWidget(self.delete_tag_btn, 0, 1)
-        grid.addWidget(self.assign_btn, 1, 0, 1, 2)
         tag_vbox.addLayout(grid)
 
         tag_group.setLayout(tag_vbox)
         main_layout.addWidget(tag_group)
         self.setLayout(main_layout)
 
-        self.create_tag_btn.clicked.connect(self._on_create_tag)
         self.delete_tag_btn.clicked.connect(self._on_delete_tag)
         self.assign_btn.clicked.connect(self._on_assign)
 
@@ -197,7 +211,10 @@ class TagPanelWidget(QWidget):
 
     # --- slots --------------------------------------------------------------
 
-    def _on_create_tag(self):
+    def _create_tag_and_assign(self, rows):
+        """Prompt for a new tag name, create it, and assign the given ROI rows
+        (indices into _saved_rois) to it. Invoked by Assign when no tag is
+        selected, so a single gesture both makes the tag and fills it."""
         name, ok = QInputDialog.getText(self, "Create Tag", "Tag name:",
                                         text=self.unique_tag_name())
         if not ok:
@@ -211,7 +228,7 @@ class TagPanelWidget(QWidget):
             return
 
         self._tags().append({'name': name, 'color': self.next_palette_color()})
-        for row in self._selected_roi_rows():
+        for row in rows:
             self.main_window._saved_rois[row]['tag'] = name
         self._emit_changed()
 
@@ -243,13 +260,17 @@ class TagPanelWidget(QWidget):
         self._emit_changed()
 
     def _on_assign(self):
-        name = self.selected_tag_name()
         rows = self._selected_roi_rows()
-        if name is None or not rows:
+        if not rows:
             QMessageBox.information(
                 self, "Assign ROIs to Tag",
-                "Select a tag in this list and one or more ROIs in the "
-                "Saved ROIs list, then click Assign.")
+                "Select one or more ROIs in the Saved ROIs list first, then "
+                "press Assign (T). With a tag selected the ROIs join that tag; "
+                "with no tag selected a new tag is created for them.")
+            return
+        name = self.selected_tag_name()
+        if name is None:
+            self._create_tag_and_assign(rows)
             return
         for row in rows:
             self.main_window._saved_rois[row]['tag'] = name

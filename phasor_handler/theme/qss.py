@@ -24,6 +24,7 @@ def build_qss(arrows=None):
     display = f.DISPLAY_FAMILY
     mono = f.MONO_FAMILY
     accent_glow = t.with_alpha(t.ACCENT, 0.12)
+    chevron_idle = t.with_alpha(t.TEXT, 0.5)
     arrow_qss = _spin_arrow_rules(arrows)
     combo_arrow_qss = _combo_arrow_rule(arrows)
 
@@ -165,6 +166,26 @@ def build_qss(arrows=None):
     }}
     QPushButton#prefs_button:pressed {{
         color: {t.ACCENT_PRESSED};
+    }}
+
+    /* Collapse/expand chevrons on the First Level side columns: flat, no
+       background, half-opacity foreground, accent on hover. */
+    QToolButton#collapseChevron {{
+        background-color: transparent;
+        color: {chevron_idle};
+        border: none;
+        padding: 0px;
+        font-size: 14px;
+        font-weight: bold;
+    }}
+    QToolButton#collapseChevron:hover {{
+        color: {t.ACCENT};
+        background-color: transparent;
+        border: none;
+    }}
+    QToolButton#collapseChevron:pressed {{
+        color: {t.ACCENT_PRESSED};
+        background-color: transparent;
     }}
 
     /* ---------- Text inputs / logs ---------- */

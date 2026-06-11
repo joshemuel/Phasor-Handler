@@ -26,7 +26,8 @@ class ImageViewWidget(QWidget):
     
     # Signals to communicate with parent
     imageUpdated = pyqtSignal()  # Emitted when a new image is displayed
-    
+    resized = pyqtSignal()       # Emitted when the widget (and its label) resizes
+
     def __init__(self, parent=None):
         super().__init__(parent)
         
@@ -77,6 +78,15 @@ class ImageViewWidget(QWidget):
         layout.addWidget(self.reg_tif_label, 1)
         self.setLayout(layout)
     
+    def resizeEvent(self, event):
+        """The displayed pixmap is scaled to the label size and centered, so the
+        ROI tool's draw-rect is only valid for the size it was last rendered at.
+        When the label resizes (window resize, or a side column collapsing), emit
+        `resized` so the view can re-render and recompute the draw-rect; otherwise
+        the centered pixmap shifts but the stale draw-rect offsets new ROIs."""
+        super().resizeEvent(event)
+        self.resized.emit()
+
     def get_label(self):
         """Get the internal QLabel for ROI tool integration."""
         return self.reg_tif_label

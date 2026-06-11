@@ -48,9 +48,11 @@ class TraceplotWidget(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(8)
 
-        # Left side: trace controls stacked vertically, pinned to the bottom.
+        # Left side: trace controls stacked vertically, pinned to the bottom. A
+        # small bottom margin keeps the last control (Frames/Seconds toggle) off
+        # the panel's bottom edge so it isn't clipped.
         controls_col = QVBoxLayout()
-        controls_col.setContentsMargins(0, 0, 0, 0)
+        controls_col.setContentsMargins(0, 0, 0, 8)
         controls_col.setSpacing(4)
         controls_col.addStretch(1)  # push the controls down to the bottom-left
 

@@ -52,7 +52,9 @@ class RoiListWidget(QWidget):
         # ROI list widget
         self.roi_list_widget = QListWidget()
         self.roi_list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.roi_list_widget.setMinimumWidth(220)
+        # Kept below the fixed side-column width (set by the analysis view) so the
+        # column width drives the layout instead of this minimum.
+        self.roi_list_widget.setMinimumWidth(150)
         self.roi_list_widget.itemSelectionChanged.connect(self._on_roi_selection_changed)
         roi_vbox.addWidget(self.roi_list_widget)
         

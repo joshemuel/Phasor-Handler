@@ -20,9 +20,11 @@ except ImportError:  # older/newer matplotlib layouts
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QScrollArea, QFrame, QDialog,
-    QDoubleSpinBox, QSpinBox, QComboBox, QCheckBox, QProgressBar
+    QDoubleSpinBox, QSpinBox, QComboBox, QCheckBox, QProgressBar,
+    QToolButton, QMenu
 )
 from PyQt6.QtCore import Qt, QThread, QLocale, pyqtSignal
+from PyQt6.QtGui import QIcon, QPixmap, QColor
 
 from phasor_handler.workers.secondlevel_worker import SecondLevelWorker
 from phasor_handler.widgets.common import FlowLayout
@@ -36,6 +38,28 @@ CARD_W = 300
 CARD_H = 206
 PLOT_W = 272
 PLOT_H = 150
+
+# Dict key standing in for "ROIs with no tag" in the tag-filter check state.
+_UNTAGGED_KEY = "\x00untagged"
+
+
+def _swatch_icon(color, size=12):
+    """A small solid-color square icon for a tag, matching the First Level panel."""
+    pm = QPixmap(size, size)
+    pm.fill(QColor(int(color[0]), int(color[1]), int(color[2])))
+    return QIcon(pm)
+
+
+class _CheckableMenu(QMenu):
+    """A QMenu that stays open when a checkable item is toggled, so several tags
+    can be checked/unchecked without reopening the dropdown each time."""
+
+    def mouseReleaseEvent(self, event):
+        action = self.activeAction()
+        if action is not None and action.isCheckable() and action.isEnabled():
+            action.trigger()  # toggle + emit triggered, but keep the menu open
+            return
+        super().mouseReleaseEvent(event)
 
 
 def _formula_ylabel(formula_idx):
@@ -149,6 +173,15 @@ class SecondLevelWidget(QWidget):
         self.worker_thread = None
         self._render_params = {}
 
+        # Tag-filter state: which tags (+ untagged) to show. Keyed by tag name and
+        # _UNTAGGED_KEY; default-shown (True) when absent. _signature tracks the
+        # tag set last built into the menu so we only rebuild on structural change.
+        self._tag_checked = {}
+        self._tag_filter_signature = None
+        self._tag_actions = {}
+        self._all_action = None
+        self._untagged_action = None
+
         self._build_ui()
 
     # ------------------------------------------------------------------ UI
@@ -245,6 +278,22 @@ class SecondLevelWidget(QWidget):
         self.reset_button = QPushButton("Reset Limits")
         self.reset_button.clicked.connect(self._reset_limits)
 
+        # Tag filter: a "Tags:" label beside a dropdown checklist of tags
+        # (+ Untagged) deciding which ROI cards to show. The button text summarizes
+        # the selection ("All" by default). Disabled when no tags exist.
+        self.tag_filter_label = QLabel("Tags:")
+        self.tag_filter_button = QToolButton()
+        self.tag_filter_button.setText("All")
+        self.tag_filter_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.tag_filter_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.tag_filter_button.setToolTip("Choose which tags to show")
+        self.tag_menu = _CheckableMenu(self.tag_filter_button)
+        self.tag_menu.setToolTipsVisible(True)
+        self.tag_filter_button.setMenu(self.tag_menu)
+        self._rebuild_tag_filter()
+
         # Hidden refresh button kept for backward compatibility (auto-update is on).
         self.refresh_button = QPushButton("Refresh Plots")
         self.refresh_button.clicked.connect(self.refresh_plots)
@@ -260,6 +309,8 @@ class SecondLevelWidget(QWidget):
         control_layout.addWidget(baseline_group)
         control_layout.addWidget(self.show_stim_checkbox)
         control_layout.addWidget(self.reset_button)
+        control_layout.addWidget(self.tag_filter_label)
+        control_layout.addWidget(self.tag_filter_button)
         control_layout.addStretch()
         control_layout.addWidget(self.count_label)
         control_group.setLayout(control_layout)
@@ -298,6 +349,126 @@ class SecondLevelWidget(QWidget):
     def _on_parameter_changed(self):
         if not self._updating:
             self.refresh_plots()
+
+    # ----------------------------------------------------------- tag filter
+    def _rebuild_tag_filter(self):
+        """Rebuild the tag dropdown from the current tags + whether any untagged
+        ROI exists, preserving check states for surviving tags. Returns True if
+        the menu structure actually changed (so callers can re-render)."""
+        tags = getattr(self.window, '_roi_tags', None) or []
+        all_rois = getattr(self.window, '_saved_rois', None) or []
+        has_untagged = any(not roi.get('tag') for roi in all_rois)
+        # Include colors so a recolor in First Level refreshes the swatch too.
+        signature = (tuple((t.get('name'), tuple(t.get('color', ()))) for t in tags),
+                     has_untagged)
+        if signature == self._tag_filter_signature:
+            return False
+        self._tag_filter_signature = signature
+
+        self.tag_menu.clear()
+        self._tag_actions = {}
+
+        self._all_action = self.tag_menu.addAction("(All)")
+        self._all_action.setCheckable(True)
+        self._all_action.triggered.connect(self._on_select_all_tags)
+        self.tag_menu.addSeparator()
+
+        for tag in tags:
+            name = tag.get('name')
+            act = self.tag_menu.addAction(
+                _swatch_icon(tag.get('color', (200, 200, 200))), str(name))
+            act.setCheckable(True)
+            act.setChecked(self._tag_checked.get(name, True))
+            act.triggered.connect(self._on_tag_filter_changed)
+            self._tag_actions[name] = act
+
+        if has_untagged:
+            self.tag_menu.addSeparator()
+            self._untagged_action = self.tag_menu.addAction("Untagged")
+            self._untagged_action.setCheckable(True)
+            self._untagged_action.setChecked(
+                self._tag_checked.get(_UNTAGGED_KEY, True))
+            self._untagged_action.triggered.connect(self._on_tag_filter_changed)
+        else:
+            self._untagged_action = None
+
+        self._sync_checked_from_actions()
+        self._refresh_all_action_state()
+        self.tag_filter_button.setEnabled(bool(tags))
+        return True
+
+    def _sync_checked_from_actions(self):
+        """Read the menu's check states back into self._tag_checked, preserving a
+        prior Untagged preference while no untagged ROIs exist."""
+        state = {}
+        for name, act in self._tag_actions.items():
+            state[name] = act.isChecked()
+        if self._untagged_action is not None:
+            state[_UNTAGGED_KEY] = self._untagged_action.isChecked()
+        elif _UNTAGGED_KEY in self._tag_checked:
+            state[_UNTAGGED_KEY] = self._tag_checked[_UNTAGGED_KEY]
+        self._tag_checked = state
+
+    def _refresh_all_action_state(self):
+        """Tick "(All)" only when every tag (+ Untagged) is checked, and update
+        the dropdown button's summary text."""
+        if self._all_action is not None:
+            acts = list(self._tag_actions.values())
+            if self._untagged_action is not None:
+                acts.append(self._untagged_action)
+            all_checked = bool(acts) and all(a.isChecked() for a in acts)
+            self._all_action.blockSignals(True)
+            self._all_action.setChecked(all_checked)
+            self._all_action.blockSignals(False)
+        self._update_tag_button_text()
+
+    def _update_tag_button_text(self):
+        """Summarize the current filter on the dropdown button: "All" when every
+        tag is shown, "None" when nothing is, else "<n> selected"."""
+        acts = list(self._tag_actions.values())
+        if self._untagged_action is not None:
+            acts.append(self._untagged_action)
+        total = len(acts)
+        checked = sum(1 for a in acts if a.isChecked())
+        if total == 0 or checked == total:
+            self.tag_filter_button.setText("All")
+        elif checked == 0:
+            self.tag_filter_button.setText("None")
+        else:
+            self.tag_filter_button.setText(f"{checked} selected")
+
+    def _on_tag_filter_changed(self, _checked=False):
+        self._sync_checked_from_actions()
+        self._refresh_all_action_state()
+        if not self._updating:
+            self.refresh_plots()
+
+    def _on_select_all_tags(self, checked):
+        for act in self._tag_actions.values():
+            act.setChecked(checked)
+        if self._untagged_action is not None:
+            self._untagged_action.setChecked(checked)
+        self._sync_checked_from_actions()
+        self._refresh_all_action_state()
+        if not self._updating:
+            self.refresh_plots()
+
+    def _apply_tag_filter(self, saved_rois):
+        """Subset of saved_rois whose tag is checked (untagged ROIs gated by the
+        Untagged item). With no tags defined, returns everything unchanged."""
+        tags = getattr(self.window, '_roi_tags', None) or []
+        if not tags:
+            return list(saved_rois)
+        include_untagged = self._tag_checked.get(_UNTAGGED_KEY, True)
+        out = []
+        for roi in saved_rois:
+            tag = roi.get('tag')
+            if not tag:
+                if include_untagged:
+                    out.append(roi)
+            elif self._tag_checked.get(tag, True):
+                out.append(roi)
+        return out
 
     def _get_frame_range(self):
         start = self.frame_start_edit.value()
@@ -448,17 +619,26 @@ class SecondLevelWidget(QWidget):
         self._stop_worker()
         self._clear_cards()
 
-        saved_rois = getattr(self.window, '_saved_rois', [])
-        if not saved_rois:
+        all_rois = getattr(self.window, '_saved_rois', [])
+        if not all_rois:
             self._show_message(
                 "No ROIs defined.\n\nDraw and save ROIs in the First Level tab.")
             return
+
+        # Keep the tag dropdown in sync, then drop ROIs whose tag is unchecked.
+        self._rebuild_tag_filter()
+        saved_rois = self._apply_tag_filter(all_rois)
 
         current_tif = getattr(self.window, '_current_tif', None)
         current_tif_chan2 = getattr(self.window, '_current_tif_chan2', None)
         if current_tif is None:
             self._show_message(
                 "No image data loaded.\n\nSelect an experiment in the First Level tab.")
+            return
+
+        if not saved_rois:
+            self._show_message(
+                "No ROIs match the selected tags.\n\nAdjust the Tags filter above.")
             return
 
         # Default frame range to the actual recording length on first load.
@@ -613,5 +793,8 @@ class SecondLevelWidget(QWidget):
                 self.frame_end_edit.setValue(nframes)
             self._updating = False
 
-        if not self.cards:
+        # Tags may have changed in First Level while this tab was hidden; rebuild
+        # the dropdown and re-render if its structure changed (or nothing is shown).
+        tag_filter_changed = self._rebuild_tag_filter()
+        if tag_filter_changed or not self.cards:
             self.refresh_plots()
