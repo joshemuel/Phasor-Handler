@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont
+from phasor_handler.theme import tokens, fonts
 import json
 import re
 
@@ -43,15 +44,16 @@ class MetadataViewer(QDialog):
         
         # Header with directory path
         self.header_label = QLabel("No experiment data loaded")
-        self.header_label.setStyleSheet("""
-            QLabel {
+        self.header_label.setStyleSheet(f"""
+            QLabel {{
                 font-size: 14px;
                 font-weight: bold;
                 padding: 10px;
-                background-color: #2E4A67;
-                border: 1px solid #ddd;
-                border-radius: 5px;
-            }
+                color: {tokens.TEXT};
+                background-color: {tokens.ELEVATED};
+                border: 1px solid {tokens.ACCENT_DIM};
+                border-radius: {tokens.RADIUS_PANEL}px;
+            }}
         """)
         layout.addWidget(self.header_label)
         
@@ -145,8 +147,10 @@ class MetadataViewer(QDialog):
         self.raw_text_edit = QTextEdit()
         self.raw_text_edit.setReadOnly(True)
         
-        # Set monospace font for better readability
-        font = QFont("Consolas", 10)
+        # Set monospace font for better readability (themed mono with fallback)
+        font = QFont(getattr(fonts, "MONO_FAMILY", "Consolas"), 10)
+        if not font.exactMatch():
+            font = QFont("Consolas", 10)
         if not font.exactMatch():
             font = QFont("Courier New", 10)
         self.raw_text_edit.setFont(font)

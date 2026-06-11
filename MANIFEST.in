@@ -4,5 +4,6 @@ include CONTRIBUTING.md
 include environment.yml
 recursive-include img *.ico *.svg
 recursive-include phasor_handler *.py
+recursive-include phasor_handler/theme/fonts *.ttf *.txt
 global-exclude __pycache__
 global-exclude *.py[co]

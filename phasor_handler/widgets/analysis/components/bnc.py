@@ -7,13 +7,15 @@ showing min/max cutoff lines.
 
 import numpy as np
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, 
+    QWidget, QVBoxLayout, QGridLayout, QLabel, QGroupBox,
     QPushButton, QDoubleSpinBox
 )
 from PyQt6.QtCore import pyqtSignal, QThread
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from ....workers import HistogramWorker
+from phasor_handler.theme import tokens
+from phasor_handler.theme.mpl import style_axes
 
 
 class BnCWidget(QWidget):
@@ -50,100 +52,79 @@ class BnCWidget(QWidget):
         self.group_box = QGroupBox("Brightness and Contrast")
         self.group_box.setObjectName('bnc_group')
         group_layout = QVBoxLayout()
-        
-        # Channel selection buttons (mutually exclusive)
-        channel_buttons_layout = QHBoxLayout()
-        
+
+        # Two equal columns; every control fills its cell so rows stay aligned
+        # and the contents sit centered within the group box.
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
         self.channel1_button = QPushButton("Channel 1")
         self.channel1_button.setCheckable(True)
         self.channel1_button.setChecked(True)
         self.channel1_button.clicked.connect(lambda: self._on_channel_selected(1))
-        self.channel1_button.setMaximumWidth(80)
-        
+
         self.channel2_button = QPushButton("Channel 2")
         self.channel2_button.setCheckable(True)
         self.channel2_button.setChecked(False)
         self.channel2_button.setEnabled(False)
         self.channel2_button.clicked.connect(lambda: self._on_channel_selected(2))
-        self.channel2_button.setMaximumWidth(80)
-        
-        channel_buttons_layout.addWidget(self.channel1_button)
-        channel_buttons_layout.addWidget(self.channel2_button)
-        
-        # Labels
-        labels_layout = QHBoxLayout()
-        labels_layout.addWidget(QLabel("Min (pth):"))
-        labels_layout.addWidget(QLabel("Max (pth):"))
-        
-        # Spinboxes
-        spinbox_layout = QHBoxLayout()
-        
+
         self.spinbox_min = QDoubleSpinBox()
         self.spinbox_min.setRange(0.0, 100.0)
         self.spinbox_min.setSingleStep(0.2)
         self.spinbox_min.setValue(0.5)
-        self.spinbox_min.setMaximumWidth(80)
         self.spinbox_min.setToolTip("Lower percentile cutoff")
         self.spinbox_min.valueChanged.connect(self._on_percentile_changed)
-        
+
         self.spinbox_max = QDoubleSpinBox()
         self.spinbox_max.setRange(0.0, 100.0)
         self.spinbox_max.setSingleStep(0.2)
         self.spinbox_max.setValue(99.5)
-        self.spinbox_max.setMaximumWidth(80)
         self.spinbox_max.setToolTip("Upper percentile cutoff")
         self.spinbox_max.valueChanged.connect(self._on_percentile_changed)
-        
-        spinbox_layout.addWidget(self.spinbox_min)
-        spinbox_layout.addWidget(self.spinbox_max)
-        spinbox_layout.addStretch()
-        
-        # Reset button and histogram toggle
-        buttons_layout = QHBoxLayout()
-        
+
         self.reset_button = QPushButton("Reset")
-        self.reset_button.setMaximumWidth(80)
         self.reset_button.setToolTip("Reset to default range (0.5-99.5)")
         self.reset_button.clicked.connect(self._on_reset)
-        
-        self.histogram_toggle = QPushButton("Show Histogram")
+
+        self.histogram_toggle = QPushButton("Dist.")
         self.histogram_toggle.setCheckable(True)
         self.histogram_toggle.setChecked(False)
-        self.histogram_toggle.setMaximumWidth(120)
         self.histogram_toggle.setToolTip("Toggle histogram display")
         self.histogram_toggle.clicked.connect(self._on_histogram_toggle)
-        
-        buttons_layout.addWidget(self.reset_button)
-        buttons_layout.addWidget(self.histogram_toggle)
-        buttons_layout.addStretch()
+
+        grid.addWidget(self.channel1_button, 0, 0)
+        grid.addWidget(self.channel2_button, 0, 1)
+        grid.addWidget(QLabel("Min (pth):"), 1, 0)
+        grid.addWidget(QLabel("Max (pth):"), 1, 1)
+        grid.addWidget(self.spinbox_min, 2, 0)
+        grid.addWidget(self.spinbox_max, 2, 1)
+        grid.addWidget(self.reset_button, 3, 0)
+        grid.addWidget(self.histogram_toggle, 3, 1)
         
         # Histogram display - smaller size
         self.histogram_figure = Figure(figsize=(2.5, 0.8), dpi=80)
-        self.histogram_figure.patch.set_facecolor('#31363b')  # Match dark theme
+        self.histogram_figure.patch.set_facecolor(tokens.ELEVATED)  # Match dark theme
         self.histogram_canvas = FigureCanvas(self.histogram_figure)
         self.histogram_canvas.setMinimumHeight(60)
         self.histogram_canvas.setMaximumHeight(80)
-        
+
         self.histogram_ax = self.histogram_figure.add_subplot(111)
-        self.histogram_ax.set_facecolor('#232629')  # Darker background for plot area
-        
-        # Hide axes
-        self.histogram_ax.set_xticks([])
-        self.histogram_ax.set_yticks([])
-        self.histogram_ax.spines['top'].set_visible(False)
-        self.histogram_ax.spines['right'].set_visible(False)
-        self.histogram_ax.spines['bottom'].set_visible(False)
-        self.histogram_ax.spines['left'].set_visible(False)
+        self.histogram_ax.set_facecolor(tokens.SURFACE)  # Darker background for plot area
+
+        # Hide axes and ticks (shared helper)
+        style_axes(self.histogram_ax, variant="histogram")
         
         # Initialize histogram lines
         self._min_line = None
         self._max_line = None
         
         # Add components to group layout
-        group_layout.addLayout(channel_buttons_layout)
-        group_layout.addLayout(labels_layout)
-        group_layout.addLayout(spinbox_layout)
-        group_layout.addLayout(buttons_layout)
+        group_layout.addLayout(grid)
         group_layout.addWidget(self.histogram_canvas)
         
         # Initially hide the histogram
@@ -191,16 +172,29 @@ class BnCWidget(QWidget):
         
         # Update button text
         if is_visible:
-            self.histogram_toggle.setText("Hide Histogram")
+            self.histogram_toggle.setText("Hide Dist.")
             self.histogram_canvas.setVisible(True)
             # Update histogram when showing
             self._update_histogram()
         else:
-            self.histogram_toggle.setText("Show Histogram")
+            self.histogram_toggle.setText("Dist.")
             self.histogram_canvas.setVisible(False)
             # Cancel any pending histogram update
             self._pending_histogram_update = False
         
+    def restyle_theme(self):
+        """Re-apply theme colors to the histogram figure after a palette switch."""
+        try:
+            self.histogram_figure.patch.set_facecolor(tokens.ELEVATED)
+            self.histogram_ax.set_facecolor(tokens.SURFACE)
+            style_axes(self.histogram_ax, variant="histogram")
+            if self.histogram_toggle.isChecked():
+                self._update_histogram()
+            else:
+                self.histogram_canvas.draw_idle()
+        except Exception as exc:  # noqa: BLE001
+            print(f"DEBUG: BnC restyle_theme failed: {exc}")
+
     def _on_reset(self):
         """Reset percentile values to defaults."""
         self.spinbox_min.setValue(0.5)
@@ -337,43 +331,35 @@ class BnCWidget(QWidget):
     def _clear_histogram(self):
         """Clear the histogram display."""
         self.histogram_ax.clear()
-        
-        # Hide axes
-        self.histogram_ax.set_xticks([])
-        self.histogram_ax.set_yticks([])
-        self.histogram_ax.spines['top'].set_visible(False)
-        self.histogram_ax.spines['right'].set_visible(False)
-        self.histogram_ax.spines['bottom'].set_visible(False)
-        self.histogram_ax.spines['left'].set_visible(False)
-        
+
+        # Hide axes (shared helper) and restore the dark plot face
+        style_axes(self.histogram_ax, variant="histogram")
+        self.histogram_ax.set_facecolor(tokens.SURFACE)
+
         self.histogram_canvas.draw()
         
     def _on_histogram_computed(self, counts, bins, min_val, max_val):
         """Handle histogram computation results from worker thread."""
         try:
             self.histogram_ax.clear()
-            
-            # Hide axes
-            self.histogram_ax.set_xticks([])
-            self.histogram_ax.set_yticks([])
-            self.histogram_ax.spines['top'].set_visible(False)
-            self.histogram_ax.spines['right'].set_visible(False)
-            self.histogram_ax.spines['bottom'].set_visible(False)
-            self.histogram_ax.spines['left'].set_visible(False)
-            
+
+            # Hide axes (shared helper) and restore the dark plot face
+            style_axes(self.histogram_ax, variant="histogram")
+            self.histogram_ax.set_facecolor(tokens.SURFACE)
+
             # Plot histogram using bar
             bin_centers = (bins[:-1] + bins[1:]) / 2
             self.histogram_ax.bar(
                 bin_centers, counts, width=1.0,
                 color=self._current_hist_color, alpha=0.7, edgecolor='none'
             )
-            
-            # Add vertical lines for min/max percentiles
+
+            # Add vertical lines for min/max percentiles (accent / amber, distinct)
             self._min_line = self.histogram_ax.axvline(
-                min_val, color='cyan', linewidth=1.5, linestyle='--', alpha=0.8
+                min_val, color=tokens.ACCENT, linewidth=1.5, linestyle='--', alpha=0.9
             )
             self._max_line = self.histogram_ax.axvline(
-                max_val, color='magenta', linewidth=1.5, linestyle='--', alpha=0.8
+                max_val, color=tokens.WARN, linewidth=1.5, linestyle='--', alpha=0.9
             )
             
             # Set limits

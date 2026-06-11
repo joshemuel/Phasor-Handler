@@ -6,24 +6,39 @@ import sys
 import os
 import subprocess
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QPushButton, QFileDialog, QMessageBox, 
-    QListView, QTreeView, QAbstractItemView, QTabWidget
+    QApplication, QMainWindow, QPushButton, QFileDialog, QMessageBox,
+    QListView, QTreeView, QAbstractItemView, QTabWidget, QMenu
 )
-from PyQt6.QtGui import QFileSystemModel, QIcon
+from PyQt6.QtGui import QFileSystemModel, QIcon, QAction, QActionGroup
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QThread
 
 from .widgets import ConversionWidget, RegistrationWidget, AnalysisWidget, SecondLevelWidget
 from .workers import RegistrationWorker, ConversionWorker, ConvertRegisterWorker
 from .models.dir_manager import DirManager
-from .themes import apply_dark_theme
-import qdarktheme
+from . import theme
+from .theme import apply_theme
+
+
+def _resolve_icon_path():
+    """Resolve the window icon package-relative so it works regardless of CWD.
+
+    The legacy relative path 'img/logo.ico' only resolved when the process was
+    launched from the package directory; otherwise it silently yielded a null
+    icon. Falls back to the legacy string if resolution fails.
+    """
+    try:
+        from importlib.resources import files
+        return str(files("phasor_handler") / "img" / "logo.ico")
+    except Exception:
+        return "img/logo.ico"
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Phasor Handler v2.0")
-        self.setWindowIcon(QIcon('img/logo.ico'))
+        self.setWindowIcon(QIcon(_resolve_icon_path()))
         # self.setMinimumSize(1400, 1000)
         # central directory manager (shared with widgets)
         self.dir_manager = DirManager()
@@ -41,6 +56,65 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(SecondLevelWidget(self), "Second Level")
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.setCentralWidget(self.tabs)
+
+        # Preferences gear in the tab-bar corner (theme switching, room to grow)
+        self._build_preferences_corner()
+
+    def _build_preferences_corner(self):
+        """Add a small gear button to the tab bar that opens a Preferences menu."""
+        self.prefs_button = QPushButton("⚙  Preferences")
+        self.prefs_button.setObjectName("prefs_button")
+        self.prefs_button.setFlat(True)
+        self.prefs_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.prefs_button.setToolTip("Preferences")
+        self.prefs_button.clicked.connect(self._show_preferences_menu)
+        self.tabs.setCornerWidget(self.prefs_button, Qt.Corner.TopRightCorner)
+        self._apply_prefs_decoration()
+
+    def restyle_theme(self):
+        """Refresh theme-dependent chrome owned by the main window.
+
+        Called by theme._refresh_dynamic_content() after a palette switch.
+        """
+        self._apply_prefs_decoration()
+
+    def _apply_prefs_decoration(self):
+        """Swap the Preferences gear for a Totoro outline in the Ghibli theme."""
+        try:
+            from .theme import icons as theme_icons, tokens
+            if theme.current_theme() == "ghibli":
+                assets = theme_icons.ensure_ghibli_assets(tokens.TEXT)
+                if assets.get("totoro"):
+                    self.prefs_button.setIcon(QIcon(assets["totoro"]))
+                    self.prefs_button.setText("Preferences")
+                    return
+            self.prefs_button.setIcon(QIcon())
+            self.prefs_button.setText("⚙  Preferences")
+        except Exception:  # noqa: BLE001 - decoration must never break the UI
+            pass
+
+    def _show_preferences_menu(self):
+        """Show the Preferences popup: a checkable, exclusive list of themes."""
+        menu = QMenu(self)
+        menu.addSection("Theme")
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        active = theme.current_theme()
+        for name, label in theme.available_themes():
+            action = QAction(label, menu)
+            action.setCheckable(True)
+            action.setChecked(name == active)
+            action.triggered.connect(lambda _checked, n=name: self._on_theme_selected(n))
+            group.addAction(action)
+            menu.addAction(action)
+        # Pop up just under the gear button.
+        menu.exec(self.prefs_button.mapToGlobal(self.prefs_button.rect().bottomLeft()))
+
+    def _on_theme_selected(self, name):
+        """Apply, persist, and refresh for the chosen theme."""
+        app = QApplication.instance()
+        if app is not None:
+            theme.set_theme(app, name)
 
     def _init_roi_state(self):
         """Initialize ROI and CNB (contrast/brightness) state on the window instance."""
@@ -65,10 +139,11 @@ class MainWindow(QMainWindow):
 
 
     def add_dirs_dialog(self, tab):
+        from .theme.dialogs import style_file_dialog
         dialog = QFileDialog(self)
         dialog.setWindowTitle('Select One or More Directories')
         dialog.setFileMode(QFileDialog.FileMode.Directory)
-        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        style_file_dialog(dialog)  # high-contrast back/forward/up nav arrows
         for view in dialog.findChildren((QListView, QTreeView)):
             if isinstance(view.model(), QFileSystemModel):
                 view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -366,9 +441,9 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     try:
-        qdarktheme.setup_theme()  # or your own apply_dark_theme()
+        apply_theme(app)  # persisted theme, defaulting to Black & White (tokens + fonts + matplotlib)
     except Exception:
-        pass  # fall back to default if theme package missing
+        pass  # never let theming block launch; fall back to default look
     window = MainWindow()
     window.showMaximized()
     sys.exit(app.exec())

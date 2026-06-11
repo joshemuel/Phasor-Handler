@@ -1,69 +1,222 @@
 """
-SecondLevelWidget - Display all ROI traces in a grid layout.
+SecondLevelWidget - Display all ROI traces in a scrollable card grid.
 
-This widget displays all saved ROI traces from the First Level analysis
-in a responsive grid layout that maintains aspect ratios.
+Shows every saved ROI trace from the First Level analysis as a dark "trace card"
+in a wrapping, auto-fitting grid (no pagination). Each card renders its mini-trace
+once to a QPixmap via the matplotlib Agg backend (not a live canvas), so hundreds
+of ROIs scroll smoothly. Clicking a card opens a larger, zoomable detail view.
+
+The trace math, formula handling, baseline cap, frame-range logic, and the
+SecondLevelWorker contract are unchanged from the previous implementation.
 """
 
+import math
+
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+try:
+    from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
+except ImportError:  # older/newer matplotlib layouts
+    from matplotlib.backends.backend_qt import NavigationToolbar2QT as NavigationToolbar
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
-    QPushButton, QScrollArea, QGridLayout, QSizePolicy,
-    QDoubleSpinBox, QSpinBox, QComboBox, QCheckBox, QProgressBar
+    QPushButton, QScrollArea, QFrame, QDialog,
+    QDoubleSpinBox, QSpinBox, QComboBox, QCheckBox, QProgressBar,
+    QToolButton, QMenu
 )
-from PyQt6.QtCore import Qt, QThread, QLocale
+from PyQt6.QtCore import Qt, QThread, QLocale, pyqtSignal
+from PyQt6.QtGui import QIcon, QPixmap, QColor
+
 from phasor_handler.workers.secondlevel_worker import SecondLevelWorker
+from phasor_handler.widgets.common import FlowLayout
+from phasor_handler.theme import tokens
+from phasor_handler.theme.mpl import render_trace_pixmap, plot_trace_on_ax
+
+# Card geometry (logical px). Cards are fixed-width so FlowLayout wraps to as many
+# columns as the viewport allows; the pixmap is rendered at device-pixel-ratio for
+# crispness on HiDPI displays.
+CARD_W = 300
+CARD_H = 206
+PLOT_W = 272
+PLOT_H = 150
+
+# Dict key standing in for "ROIs with no tag" in the tag-filter check state.
+_UNTAGGED_KEY = "\x00untagged"
+
+
+def _swatch_icon(color, size=12):
+    """A small solid-color square icon for a tag, matching the First Level panel."""
+    pm = QPixmap(size, size)
+    pm.fill(QColor(int(color[0]), int(color[1]), int(color[2])))
+    return QIcon(pm)
+
+
+class _CheckableMenu(QMenu):
+    """A QMenu that stays open when a checkable item is toggled, so several tags
+    can be checked/unchecked without reopening the dropdown each time."""
+
+    def mouseReleaseEvent(self, event):
+        action = self.activeAction()
+        if action is not None and action.isCheckable() and action.isEnabled():
+            action.trigger()  # toggle + emit triggered, but keep the menu open
+            return
+        super().mouseReleaseEvent(event)
+
+
+def _formula_ylabel(formula_idx):
+    """Y-axis label for a given formula index (matches First Level conventions)."""
+    if formula_idx in (0, 1):
+        return "ΔF/F₀"
+    if formula_idx == 2:
+        return "Green (a.u.)"
+    if formula_idx == 3:
+        return "Red (a.u.)"
+    return "Signal"
+
+
+class _TraceCard(QFrame):
+    """A single ROI trace card: title chip + mini-trace pixmap, click to expand."""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, roi_name, pixmap, parent=None, card_w=CARD_W, card_h=CARD_H):
+        super().__init__(parent)
+        self.setObjectName("traceCard")
+        self.setFixedSize(card_w, card_h)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(f"""
+            QFrame#traceCard {{
+                background-color: {tokens.ELEVATED};
+                border: 1px solid {tokens.HAIRLINE};
+                border-radius: {tokens.RADIUS_PANEL}px;
+            }}
+            QFrame#traceCard:hover {{
+                border: 1px solid {tokens.ACCENT};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(6)
+
+        title = QLabel(roi_name)
+        title.setStyleSheet(
+            f"color: {tokens.ACCENT}; font-weight: 600; font-size: 12px; "
+            f"background: transparent; border: none;")
+        title.setMaximumHeight(20)
+        layout.addWidget(title)
+
+        self._image = QLabel()
+        self._image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._image.setStyleSheet("background: transparent; border: none;")
+        if pixmap is not None and not pixmap.isNull():
+            self._image.setPixmap(pixmap)
+        layout.addWidget(self._image, 1)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class _TraceDetailDialog(QDialog):
+    """A larger, zoomable view of one ROI trace (live matplotlib canvas)."""
+
+    def __init__(self, roi_name, trace, *, frame_start, frame_end, ymin, ymax,
+                 stim_frames, ylabel, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Trace - {roi_name}")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.resize(820, 520)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        # Figure created directly (not via pyplot) so it GCs with the dialog.
+        fig = Figure(figsize=(8, 4.6), dpi=100)
+        fig.patch.set_facecolor(tokens.BASE)
+        self._canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(tokens.SURFACE)
+        plot_trace_on_ax(
+            ax, trace, frame_start=frame_start, frame_end=frame_end,
+            ymin=ymin, ymax=ymax, stim_frames=stim_frames,
+            title=roi_name, ylabel=ylabel, variant="card",
+            title_size=14, label_size=12, tick_size=10, linewidth=1.6,
+        )
+        fig.tight_layout(pad=0.8)
+
+        toolbar = NavigationToolbar(self._canvas, self)
+        layout.addWidget(toolbar)
+        layout.addWidget(self._canvas, 1)
 
 
 class SecondLevelWidget(QWidget):
-    """Second Level Analysis tab - displays all ROI traces in a grid layout."""
+    """Second Level Analysis tab - all ROI traces in a scrollable card grid."""
 
     def __init__(self, main_window):
         super().__init__()
         self.window = main_window
-        
-        # Store reference in main window
+
+        # Store reference in main window (used by app.py on tab change).
         self.window.second_level_widget = self
-        
-        # Make the widget focusable
+
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        
-        # Store plot references
-        self.plot_widgets = []
-        
-        # Pagination state
-        self.current_page = 0
-        self.plots_per_page = 15  # Maximum plots per page to prevent window expansion
-        
-        # Set white background only for plot area, keep toolbar with theme
-        self.setStyleSheet("")  # Don't override theme
-        
-        # Flag to prevent recursive updates
+
+        # Card widgets currently displayed.
+        self.cards = []
+
+        # Cached traces from the last worker run, the context needed to re-render
+        # them, and the card size last used — so a resize can re-zoom a small ROI
+        # set without recomputing traces.
+        self._trace_data_list = []
+        self._render_meta = {}
+        self._card_dims = (CARD_W, CARD_H)
+
+        # Guard against recursive parameter-change refreshes.
         self._updating = False
-        
-        # Worker thread management
+
+        # Worker thread management.
         self.worker = None
         self.worker_thread = None
-        
-        # Build UI
+        self._render_params = {}
+
+        # Tag-filter state: which tags (+ untagged) to show. Keyed by tag name and
+        # _UNTAGGED_KEY; default-shown (True) when absent. _signature tracks the
+        # tag set last built into the menu so we only rebuild on structural change.
+        self._tag_checked = {}
+        self._tag_filter_signature = None
+        self._tag_actions = {}
+        self._all_action = None
+        self._untagged_action = None
+
         self._build_ui()
-        
+
+    # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        """Build the second level UI with controls and grid of plots."""
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        
-        # --- Control Panel ---
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
+
+        # --- Control bar ---
         control_group = QGroupBox("Display Controls")
-        # Don't override theme for control panel
         control_layout = QHBoxLayout()
-        
-        # Y-axis limits (auto-adjusted based on formula)
+        control_layout.setSpacing(10)
+        # Tight margins keep the control bar short; the title eats some height so
+        # we trim the top/bottom padding the layout adds inside the group box.
+        control_layout.setContentsMargins(8, 2, 8, 4)
+
+        # Inner group boxes pile their own title + padding on top of the outer
+        # one; squeezing each inner layout keeps the whole bar compact.
+        def _compact(layout):
+            layout.setContentsMargins(8, 2, 8, 2)
+            layout.setSpacing(6)
+            return layout
+
+        # Y-axis limits
         ylim_group = QGroupBox("Y-Axis Limits")
-        ylim_layout = QHBoxLayout()
+        ylim_layout = _compact(QHBoxLayout())
         ylim_layout.addWidget(QLabel("Min:"))
         self.ylim_min_edit = QDoubleSpinBox()
         self.ylim_min_edit.setRange(-999999.99, 999999.99)
@@ -73,7 +226,6 @@ class SecondLevelWidget(QWidget):
         self.ylim_min_edit.setMaximumWidth(100)
         self.ylim_min_edit.valueChanged.connect(self._on_parameter_changed)
         ylim_layout.addWidget(self.ylim_min_edit)
-        
         ylim_layout.addWidget(QLabel("Max:"))
         self.ylim_max_edit = QDoubleSpinBox()
         self.ylim_max_edit.setRange(-999999.99, 999999.99)
@@ -84,10 +236,10 @@ class SecondLevelWidget(QWidget):
         self.ylim_max_edit.valueChanged.connect(self._on_parameter_changed)
         ylim_layout.addWidget(self.ylim_max_edit)
         ylim_group.setLayout(ylim_layout)
-        
+
         # Frame range
         frame_group = QGroupBox("Frame Range")
-        frame_layout = QHBoxLayout()
+        frame_layout = _compact(QHBoxLayout())
         frame_layout.addWidget(QLabel("Start:"))
         self.frame_start_edit = QSpinBox()
         self.frame_start_edit.setRange(0, 999999)
@@ -95,7 +247,6 @@ class SecondLevelWidget(QWidget):
         self.frame_start_edit.setMaximumWidth(100)
         self.frame_start_edit.valueChanged.connect(self._on_parameter_changed)
         frame_layout.addWidget(self.frame_start_edit)
-        
         frame_layout.addWidget(QLabel("End:"))
         self.frame_end_edit = QSpinBox()
         self.frame_end_edit.setRange(0, 999999)
@@ -105,23 +256,23 @@ class SecondLevelWidget(QWidget):
         self.frame_end_edit.valueChanged.connect(self._on_parameter_changed)
         frame_layout.addWidget(self.frame_end_edit)
         frame_group.setLayout(frame_layout)
-        
-        # Formula selection
+
+        # Formula
         formula_group = QGroupBox("Formula")
-        formula_layout = QHBoxLayout()
+        formula_layout = _compact(QHBoxLayout())
         self.formula_dropdown = QComboBox()
         self.formula_dropdown.addItem("Fg - Fog / Fr")
         self.formula_dropdown.addItem("Fg - Fog / Fog")
         self.formula_dropdown.addItem("Fg only")
         self.formula_dropdown.addItem("Fr only")
-        self.formula_dropdown.setCurrentIndex(1)  # Default to (Fg - Fog) / Fog
+        self.formula_dropdown.setCurrentIndex(1)
         self.formula_dropdown.currentIndexChanged.connect(self._on_formula_changed)
         formula_layout.addWidget(self.formula_dropdown)
         formula_group.setLayout(formula_layout)
-        
-        # Baseline seconds
+
+        # Baseline
         baseline_group = QGroupBox("Baseline")
-        baseline_layout = QHBoxLayout()
+        baseline_layout = _compact(QHBoxLayout())
         baseline_layout.addWidget(QLabel("Baseline (s):"))
         self.baseline_spinbox = QDoubleSpinBox()
         c_locale = QLocale(QLocale.Language.C)
@@ -136,133 +287,243 @@ class SecondLevelWidget(QWidget):
         self.baseline_spinbox.valueChanged.connect(self._on_parameter_changed)
         baseline_layout.addWidget(self.baseline_spinbox)
         baseline_group.setLayout(baseline_layout)
-        
+
         # Stimulation toggle
         self.show_stim_checkbox = QCheckBox("Show Stimulation")
         self.show_stim_checkbox.setChecked(False)
         self.show_stim_checkbox.stateChanged.connect(self._on_parameter_changed)
-        
-        # Buttons
-        self.refresh_button = QPushButton("Refresh Plots")
-        self.refresh_button.clicked.connect(self.refresh_plots)
-        self.refresh_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; padding: 5px; font-weight: bold; }")
-        self.refresh_button.setVisible(False)  # Hide since we have auto-update now
-        
+
+        # Reset button (themed; no more ad-hoc colored buttons)
         self.reset_button = QPushButton("Reset Limits")
         self.reset_button.clicked.connect(self._reset_limits)
-        self.reset_button.setStyleSheet("QPushButton { background-color: #2196F3; color: white; padding: 5px; font-weight: bold; }")
-        
-        # Pagination buttons
-        self.prev_page_button = QPushButton("◀ Previous")
-        self.prev_page_button.clicked.connect(self._prev_page)
-        self.prev_page_button.setStyleSheet("QPushButton { background-color: #FF9800; color: white; padding: 5px; font-weight: bold; }")
-        self.prev_page_button.setEnabled(False)
-        
-        self.page_label = QLabel("Page 1")
-        self.page_label.setStyleSheet("QLabel { font-weight: bold; padding: 5px; }")
-        
-        self.next_page_button = QPushButton("Next ▶")
-        self.next_page_button.clicked.connect(self._next_page)
-        self.next_page_button.setStyleSheet("QPushButton { background-color: #FF9800; color: white; padding: 5px; font-weight: bold; }")
-        self.next_page_button.setEnabled(False)
-        
-        # Progress bar for loading
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("Computing traces: %v/%m")
-        
-        # Assemble control layout
+
+        # Tag filter: a "Tags:" label beside a dropdown checklist of tags
+        # (+ Untagged) deciding which ROI cards to show. The button text summarizes
+        # the selection ("All" by default). Disabled when no tags exist.
+        self.tag_filter_label = QLabel("Tags:")
+        self.tag_filter_button = QToolButton()
+        self.tag_filter_button.setText("All")
+        self.tag_filter_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.tag_filter_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.tag_filter_button.setToolTip("Choose which tags to show")
+        self.tag_menu = _CheckableMenu(self.tag_filter_button)
+        self.tag_menu.setToolTipsVisible(True)
+        self.tag_filter_button.setMenu(self.tag_menu)
+        self._rebuild_tag_filter()
+
+        # Hidden refresh button kept for backward compatibility (auto-update is on).
+        self.refresh_button = QPushButton("Refresh Plots")
+        self.refresh_button.clicked.connect(self.refresh_plots)
+        self.refresh_button.setVisible(False)
+
+        # Count readout (replaces the page label).
+        self.count_label = QLabel("")
+        self.count_label.setStyleSheet(f"color: {tokens.MUTED};")
+
         control_layout.addWidget(ylim_group)
         control_layout.addWidget(frame_group)
         control_layout.addWidget(formula_group)
         control_layout.addWidget(baseline_group)
         control_layout.addWidget(self.show_stim_checkbox)
-        # control_layout.addWidget(self.refresh_button)  # Hidden since we have auto-update
         control_layout.addWidget(self.reset_button)
+        control_layout.addWidget(self.tag_filter_label)
+        control_layout.addWidget(self.tag_filter_button)
         control_layout.addStretch()
-        control_layout.addWidget(self.prev_page_button)
-        control_layout.addWidget(self.page_label)
-        control_layout.addWidget(self.next_page_button)
-        
+        control_layout.addWidget(self.count_label)
         control_group.setLayout(control_layout)
         main_layout.addWidget(control_group)
-        
-        # Progress bar
+
+        # --- Progress bar ---
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("Computing traces  %v / %m")
         main_layout.addWidget(self.progress_bar)
-        
-        # --- Grid of Plots (no scrolling - fit everything on screen) ---
-        # Container for the grid
-        self.grid_container = QWidget()
-        self.grid_container.setStyleSheet("QWidget { background-color: white; }")
-        self.grid_layout = QGridLayout()
-        self.grid_layout.setSpacing(5)  # Reduced spacing for plots next to each other
-        self.grid_layout.setContentsMargins(5, 5, 5, 5)
-        self.grid_container.setLayout(self.grid_layout)
-        
-        main_layout.addWidget(self.grid_container, 1)  # Give it stretch to fill space
-        
+
+        # --- Message label (empty / error states) ---
+        self.message_label = QLabel("")
+        self.message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message_label.setWordWrap(True)
+        self.message_label.setVisible(False)
+        main_layout.addWidget(self.message_label, 1)
+
+        # --- Scrollable card grid ---
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_content = QWidget()
+        self.flow_layout = FlowLayout(margin=4, spacing=14, center=True)
+        self.scroll_content.setLayout(self.flow_layout)
+        self.scroll_area.setWidget(self.scroll_content)
+        main_layout.addWidget(self.scroll_area, 1)
+
         self.setLayout(main_layout)
-        
-        # Initial plot generation (will also set default frame range)
+
         self.refresh_plots()
-    
+
+    # -------------------------------------------------------------- helpers
     def _on_parameter_changed(self):
-        """Called when any parameter changes - auto-refresh plots."""
         if not self._updating:
             self.refresh_plots()
-    
+
+    # ----------------------------------------------------------- tag filter
+    def _rebuild_tag_filter(self):
+        """Rebuild the tag dropdown from the current tags + whether any untagged
+        ROI exists, preserving check states for surviving tags. Returns True if
+        the menu structure actually changed (so callers can re-render)."""
+        tags = getattr(self.window, '_roi_tags', None) or []
+        all_rois = getattr(self.window, '_saved_rois', None) or []
+        has_untagged = any(not roi.get('tag') for roi in all_rois)
+        # Include colors so a recolor in First Level refreshes the swatch too.
+        signature = (tuple((t.get('name'), tuple(t.get('color', ()))) for t in tags),
+                     has_untagged)
+        if signature == self._tag_filter_signature:
+            return False
+        self._tag_filter_signature = signature
+
+        self.tag_menu.clear()
+        self._tag_actions = {}
+
+        self._all_action = self.tag_menu.addAction("(All)")
+        self._all_action.setCheckable(True)
+        self._all_action.triggered.connect(self._on_select_all_tags)
+        self.tag_menu.addSeparator()
+
+        for tag in tags:
+            name = tag.get('name')
+            act = self.tag_menu.addAction(
+                _swatch_icon(tag.get('color', (200, 200, 200))), str(name))
+            act.setCheckable(True)
+            act.setChecked(self._tag_checked.get(name, True))
+            act.triggered.connect(self._on_tag_filter_changed)
+            self._tag_actions[name] = act
+
+        if has_untagged:
+            self.tag_menu.addSeparator()
+            self._untagged_action = self.tag_menu.addAction("Untagged")
+            self._untagged_action.setCheckable(True)
+            self._untagged_action.setChecked(
+                self._tag_checked.get(_UNTAGGED_KEY, True))
+            self._untagged_action.triggered.connect(self._on_tag_filter_changed)
+        else:
+            self._untagged_action = None
+
+        self._sync_checked_from_actions()
+        self._refresh_all_action_state()
+        self.tag_filter_button.setEnabled(bool(tags))
+        return True
+
+    def _sync_checked_from_actions(self):
+        """Read the menu's check states back into self._tag_checked, preserving a
+        prior Untagged preference while no untagged ROIs exist."""
+        state = {}
+        for name, act in self._tag_actions.items():
+            state[name] = act.isChecked()
+        if self._untagged_action is not None:
+            state[_UNTAGGED_KEY] = self._untagged_action.isChecked()
+        elif _UNTAGGED_KEY in self._tag_checked:
+            state[_UNTAGGED_KEY] = self._tag_checked[_UNTAGGED_KEY]
+        self._tag_checked = state
+
+    def _refresh_all_action_state(self):
+        """Tick "(All)" only when every tag (+ Untagged) is checked, and update
+        the dropdown button's summary text."""
+        if self._all_action is not None:
+            acts = list(self._tag_actions.values())
+            if self._untagged_action is not None:
+                acts.append(self._untagged_action)
+            all_checked = bool(acts) and all(a.isChecked() for a in acts)
+            self._all_action.blockSignals(True)
+            self._all_action.setChecked(all_checked)
+            self._all_action.blockSignals(False)
+        self._update_tag_button_text()
+
+    def _update_tag_button_text(self):
+        """Summarize the current filter on the dropdown button: "All" when every
+        tag is shown, "None" when nothing is, else "<n> selected"."""
+        acts = list(self._tag_actions.values())
+        if self._untagged_action is not None:
+            acts.append(self._untagged_action)
+        total = len(acts)
+        checked = sum(1 for a in acts if a.isChecked())
+        if total == 0 or checked == total:
+            self.tag_filter_button.setText("All")
+        elif checked == 0:
+            self.tag_filter_button.setText("None")
+        else:
+            self.tag_filter_button.setText(f"{checked} selected")
+
+    def _on_tag_filter_changed(self, _checked=False):
+        self._sync_checked_from_actions()
+        self._refresh_all_action_state()
+        if not self._updating:
+            self.refresh_plots()
+
+    def _on_select_all_tags(self, checked):
+        for act in self._tag_actions.values():
+            act.setChecked(checked)
+        if self._untagged_action is not None:
+            self._untagged_action.setChecked(checked)
+        self._sync_checked_from_actions()
+        self._refresh_all_action_state()
+        if not self._updating:
+            self.refresh_plots()
+
+    def _apply_tag_filter(self, saved_rois):
+        """Subset of saved_rois whose tag is checked (untagged ROIs gated by the
+        Untagged item). With no tags defined, returns everything unchanged."""
+        tags = getattr(self.window, '_roi_tags', None) or []
+        if not tags:
+            return list(saved_rois)
+        include_untagged = self._tag_checked.get(_UNTAGGED_KEY, True)
+        out = []
+        for roi in saved_rois:
+            tag = roi.get('tag')
+            if not tag:
+                if include_untagged:
+                    out.append(roi)
+            elif self._tag_checked.get(tag, True):
+                out.append(roi)
+        return out
+
     def _get_frame_range(self):
-        """Parse frame range from user input."""
         start = self.frame_start_edit.value()
         end = self.frame_end_edit.value()
-        
-        # If end is at max (999999), treat as "All"
         if end >= 999999:
             end = None
-        
         return start, end
-    
+
     def _get_ylim(self):
-        """Parse y-axis limits from user input."""
         ymin = self.ylim_min_edit.value()
         ymax = self.ylim_max_edit.value()
-        
-        # If values are at extremes, treat as auto
         if ymin <= -999999:
             ymin = None
         if ymax >= 999999:
             ymax = None
-        
         return ymin, ymax
-    
+
     def _on_formula_changed(self):
-        """Update ylim when formula changes."""
         if self._updating:
             return
-            
         self._updating = True
         formula_idx = self.formula_dropdown.currentIndex()
-        
-        # Adjust ylim based on formula type
-        if formula_idx in [0, 1]:  # Normalized formulas (ΔF/F₀)
+        if formula_idx in (0, 1):  # normalized dF/F0
             self.ylim_min_edit.setValue(-0.1)
             self.ylim_max_edit.setValue(0.5)
-        else:  # Raw signals (Fg only, Fr only)
+        else:  # raw signals
             self.ylim_min_edit.setValue(0)
             self.ylim_max_edit.setValue(1000)
-        
         self._updating = False
         self.refresh_plots()
-    
+
     def _reset_limits(self):
-        """Reset all limit controls to defaults."""
         self._updating = True
         self.ylim_min_edit.setValue(-0.1)
         self.ylim_max_edit.setValue(0.5)
         self.frame_start_edit.setValue(0)
-        
-        # Set frame end to actual recording length
         current_tif = getattr(self.window, '_current_tif', None)
         if current_tif is not None:
             nframes = current_tif.shape[0] if current_tif.ndim == 3 else 1
@@ -270,12 +531,11 @@ class SecondLevelWidget(QWidget):
             self.frame_end_edit.setValue(nframes)
         else:
             self.frame_end_edit.setValue(999999)
-            
         self.baseline_spinbox.setValue(5.0)
         self.formula_dropdown.setCurrentIndex(1)
         self._updating = False
         self.refresh_plots()
-    
+
     def _update_baseline_max(self, nframes):
         """Cap baseline spinbox maximum to total recording duration in seconds."""
         exp_data = getattr(self.window, '_exp_data', None)
@@ -283,8 +543,6 @@ class SecondLevelWidget(QWidget):
             return
 
         total_s = None
-
-        # --- Try timestamps ---
         time_stamps = None
         for attr_name in ['time_stamps', 'timeStamps', 'timestamps', 'ElapsedTimes']:
             if isinstance(exp_data, dict):
@@ -307,14 +565,10 @@ class SecondLevelWidget(QWidget):
                 else:
                     ts_arr = np.asarray(time_stamps[:min(nframes, len(time_stamps))], dtype=float)
                     max_t = float(ts_arr[-1]) if len(ts_arr) > 0 else 0
-                    if max_t > 10000:
-                        total_s = max_t / 1000.0
-                    else:
-                        total_s = max_t
+                    total_s = max_t / 1000.0 if max_t > 10000 else max_t
             except Exception:
                 pass
 
-        # --- Fallback: frame_rate ---
         if total_s is None:
             frame_rate = None
             if isinstance(exp_data, dict):
@@ -333,57 +587,85 @@ class SecondLevelWidget(QWidget):
             self.baseline_spinbox.setMaximum(round(total_s, 1))
         else:
             self.baseline_spinbox.setMaximum(9999.0)
-    
-    def _prev_page(self):
-        """Go to previous page of plots."""
-        if self.current_page > 0:
-            self.current_page -= 1
-            self.refresh_plots()
-    
-    def _next_page(self):
-        """Go to next page of plots."""
-        saved_rois = getattr(self.window, '_saved_rois', [])
-        total_pages = max(1, (len(saved_rois) + self.plots_per_page - 1) // self.plots_per_page)
-        if self.current_page < total_pages - 1:
-            self.current_page += 1
-            self.refresh_plots()
-    
-    def refresh_plots(self):
-        """Update all ROI trace plots in the grid."""
-        # Stop any existing worker
-        self._stop_worker()
-        
-        # Clear existing plots
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item.widget():
+
+    def _get_stimulation_frames(self):
+        """Get stimulation frame indices from experiment metadata."""
+        try:
+            exp_data = getattr(self.window, '_exp_data', None)
+            if exp_data is None:
+                return []
+            if isinstance(exp_data, dict):
+                stim_frames = exp_data.get('stimulation_timeframes', [])
+            elif hasattr(exp_data, 'stimulation_timeframes'):
+                stim_frames = getattr(exp_data, 'stimulation_timeframes', [])
+            else:
+                try:
+                    stim_frames = exp_data['stimulation_timeframes']
+                except (KeyError, TypeError):
+                    stim_frames = []
+            if stim_frames and len(stim_frames) > 0:
+                return list(stim_frames)
+        except Exception:
+            pass
+        return []
+
+    # ----------------------------------------------------------- card grid
+    def _clear_cards(self):
+        while self.flow_layout.count():
+            item = self.flow_layout.takeAt(0)
+            if item is not None and item.widget():
                 item.widget().deleteLater()
-        self.plot_widgets.clear()
-        
-        # Get saved ROIs from main window
-        saved_rois = getattr(self.window, '_saved_rois', [])
-        if not saved_rois:
-            # Display a message if no ROIs
-            label = QLabel("No ROIs defined.\n\nPlease draw and save ROIs in the First Level tab.")
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setStyleSheet("QLabel { color: #666; font-size: 14pt; background-color: white; padding: 50px; }")
-            self.grid_layout.addWidget(label, 0, 0, 1, 5)
-            self.plot_widgets.append(label)
+        self.cards = []
+
+    def _show_message(self, text, danger=False):
+        """Show a centered empty/error message and hide the card grid."""
+        self._clear_cards()
+        # Drop the cached traces so a later resize can't repopulate over the message.
+        self._trace_data_list = []
+        color = tokens.DANGER if danger else tokens.MUTED
+        self.message_label.setStyleSheet(
+            f"color: {color}; font-size: 15px; padding: 40px;")
+        self.message_label.setText(text)
+        self.message_label.setVisible(True)
+        self.scroll_area.setVisible(False)
+        self.count_label.setText("")
+
+    def _show_grid(self):
+        self.message_label.setVisible(False)
+        self.scroll_area.setVisible(True)
+
+    # ------------------------------------------------------------- refresh
+    def refresh_plots(self):
+        """Recompute traces (full ROI set) and rebuild the card grid."""
+        self._stop_worker()
+        self._clear_cards()
+        # Stale until the new worker delivers; prevents a resize mid-compute from
+        # repopulating the grid with the previous run's traces.
+        self._trace_data_list = []
+
+        all_rois = getattr(self.window, '_saved_rois', [])
+        if not all_rois:
+            self._show_message(
+                "No ROIs defined.\n\nDraw and save ROIs in the First Level tab.")
             return
-        
-        # Get current image data
+
+        # Keep the tag dropdown in sync, then drop ROIs whose tag is unchecked.
+        self._rebuild_tag_filter()
+        saved_rois = self._apply_tag_filter(all_rois)
+
         current_tif = getattr(self.window, '_current_tif', None)
         current_tif_chan2 = getattr(self.window, '_current_tif_chan2', None)
-        
         if current_tif is None:
-            label = QLabel("No image data loaded.\n\nPlease select an experiment in the First Level tab.")
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setStyleSheet("QLabel { color: #666; font-size: 14pt; background-color: white; padding: 50px; }")
-            self.grid_layout.addWidget(label, 0, 0, 1, 5)
-            self.plot_widgets.append(label)
+            self._show_message(
+                "No image data loaded.\n\nSelect an experiment in the First Level tab.")
             return
-        
-        # Set default frame range based on actual recording length (only on first load)
+
+        if not saved_rois:
+            self._show_message(
+                "No ROIs match the selected tags.\n\nAdjust the Tags filter above.")
+            return
+
+        # Default frame range to the actual recording length on first load.
         nframes = current_tif.shape[0] if current_tif.ndim == 3 else 1
         if self.frame_end_edit.value() == 999999 and not self._updating:
             self._updating = True
@@ -391,55 +673,26 @@ class SecondLevelWidget(QWidget):
             self.frame_end_edit.setValue(nframes)
             self.frame_start_edit.setMaximum(nframes - 1)
             self._updating = False
-        
-        # Cap baseline spinbox to total recording duration
+
         self._update_baseline_max(nframes)
-        
-        # Get frame range and y-limits
+
         frame_start, frame_end = self._get_frame_range()
         ymin, ymax = self._get_ylim()
-        
-        # Pagination: determine which ROIs to show on current page
+
         total_rois = len(saved_rois)
-        total_pages = max(1, (total_rois + self.plots_per_page - 1) // self.plots_per_page)
-        
-        # Ensure current_page is valid
-        if self.current_page >= total_pages:
-            self.current_page = total_pages - 1
-        if self.current_page < 0:
-            self.current_page = 0
-        
-        # Update pagination buttons
-        self.prev_page_button.setEnabled(self.current_page > 0)
-        self.next_page_button.setEnabled(self.current_page < total_pages - 1)
-        self.page_label.setText(f"Page {self.current_page + 1} of {total_pages}")
-        
-        # Get ROIs for current page
-        start_idx = self.current_page * self.plots_per_page
-        end_idx = min(start_idx + self.plots_per_page, total_rois)
-        num_rois = end_idx - start_idx
-        
-        print(f"DEBUG: Starting worker to compute {num_rois} traces (page {self.current_page + 1}/{total_pages})")
-        
-        # Show progress bar
+        self._show_grid()
         self.progress_bar.setVisible(True)
-        self.progress_bar.setMaximum(num_rois)
+        self.progress_bar.setMaximum(total_rois)
         self.progress_bar.setValue(0)
-        
-        # Store parameters for rendering
+
         self._render_params = {
             'frame_start': frame_start,
             'frame_end': frame_end,
             'ymin': ymin,
             'ymax': ymax,
-            'current_tif': current_tif,
-            'current_tif_chan2': current_tif_chan2,
-            'num_cols': 5  # Always use 5 columns for consistent layout
         }
-        
-        # Start worker thread to compute traces
-        self.worker_thread = QThread()
-        # Get time_stamps and frame_rate from experiment metadata
+
+        # --- Worker (unchanged contract; full ROI set, no pagination) ---
         exp_data = getattr(self.window, '_exp_data', None)
         time_stamps = None
         frame_rate = None
@@ -450,7 +703,8 @@ class SecondLevelWidget(QWidget):
             else:
                 time_stamps = getattr(exp_data, 'time_stamps', None)
                 frame_rate = getattr(exp_data, 'frame_rate', None)
-        
+
+        self.worker_thread = QThread()
         self.worker = SecondLevelWorker(
             saved_rois=saved_rois,
             tif=current_tif,
@@ -459,11 +713,10 @@ class SecondLevelWidget(QWidget):
             baseline_seconds=self.baseline_spinbox.value(),
             frame_start=frame_start,
             frame_end=frame_end,
-            page_rois_slice=(start_idx, end_idx),
+            page_rois_slice=(0, total_rois),
             time_stamps=time_stamps,
-            frame_rate=frame_rate
+            frame_rate=frame_rate,
         )
-        
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.finished.connect(self._on_worker_finished)
@@ -471,270 +724,177 @@ class SecondLevelWidget(QWidget):
         self.worker.error.connect(self._on_worker_error)
         self.worker.finished.connect(self.worker_thread.quit)
         self.worker.finished.connect(self._cleanup_worker)
-        
         self.worker_thread.start()
-    
+
     def _stop_worker(self):
-        """Stop any running worker thread."""
         try:
             if self.worker_thread is not None and self.worker_thread.isRunning():
-                # Disconnect signals to prevent callbacks during shutdown
-                try:
-                    self.worker_thread.started.disconnect()
-                except:
-                    pass
-                try:
-                    self.worker.finished.disconnect()
-                except:
-                    pass
-                try:
-                    self.worker.progress.disconnect()
-                except:
-                    pass
-                try:
-                    self.worker.error.disconnect()
-                except:
-                    pass
-                
-                # Stop the thread
+                for sig in ('started',):
+                    try:
+                        getattr(self.worker_thread, sig).disconnect()
+                    except Exception:
+                        pass
+                for sig in ('finished', 'progress', 'error'):
+                    try:
+                        getattr(self.worker, sig).disconnect()
+                    except Exception:
+                        pass
                 self.worker_thread.quit()
-                self.worker_thread.wait(1000)  # Wait up to 1 second
+                self.worker_thread.wait(1000)
         except RuntimeError:
-            # Thread already deleted, ignore
             pass
         finally:
             self.worker = None
             self.worker_thread = None
-    
+
     def _cleanup_worker(self):
-        """Clean up worker and thread after completion."""
         if self.worker is not None:
             self.worker.deleteLater()
         if self.worker_thread is not None:
             self.worker_thread.deleteLater()
         self.worker = None
         self.worker_thread = None
-    
+
     def _on_worker_progress(self, current, total):
-        """Update progress bar as worker processes ROIs."""
         self.progress_bar.setValue(current)
-    
+
     def _on_worker_error(self, error_msg):
-        """Handle worker error."""
-        print(f"Worker error: {error_msg}")
         self.progress_bar.setVisible(False)
-        
-        # Show error message
-        label = QLabel(f"Error computing traces:\n\n{error_msg}")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("QLabel { color: #d32f2f; font-size: 12pt; background-color: white; padding: 50px; }")
-        self.grid_layout.addWidget(label, 0, 0, 1, 5)
-    
+        self._show_message(f"Error computing traces:\n\n{error_msg}", danger=True)
+
     def _on_worker_finished(self, trace_data_list):
-        """Render plots after worker completes trace extraction."""
-        # Hide progress bar
         self.progress_bar.setVisible(False)
-        
-        # Get render parameters
-        params = self._render_params
-        frame_start = params['frame_start']
-        frame_end = params['frame_end']
-        ymin = params['ymin']
-        ymax = params['ymax']
-        num_cols = params['num_cols']
-        
-        num_rois = len(trace_data_list)
-        print(f"DEBUG: Rendering {num_rois} plots in {num_cols} columns")
-        
-        # Always use 5 columns for consistent layout
-        num_cols = 5
-        
-        # Create plots in calculated grid
-        for plot_idx, trace_data in enumerate(trace_data_list):
+        # Cache the computed traces + their render context so we can re-render the
+        # cards (e.g. to re-zoom a small ROI set) without recomputing on the worker.
+        self._trace_data_list = trace_data_list
+        self._render_meta = {
+            'frame_start': self._render_params['frame_start'],
+            'frame_end': self._render_params['frame_end'],
+            'ymin': self._render_params['ymin'],
+            'ymax': self._render_params['ymax'],
+            'ylabel': _formula_ylabel(self.formula_dropdown.currentIndex()),
+            'stim_frames': (self._get_stimulation_frames()
+                            if self.show_stim_checkbox.isChecked() else None),
+        }
+        self._populate_cards()
+
+    def _compute_card_dims(self, n):
+        """Pick the card size for `n` cards. Many ROIs use the base size and scroll;
+        a small set is zoomed up to fill the viewport (capped so a lone ROI doesn't
+        balloon). Returns (card_w, card_h, plot_w, plot_h)."""
+        if n <= 0:
+            return CARD_W, CARD_H, PLOT_W, PLOT_H
+
+        viewport = self.scroll_area.viewport()
+        vw = viewport.width()
+        vh = viewport.height()
+        spacing = self.flow_layout._spacing
+        margins = self.flow_layout.contentsMargins()
+        avail_w = vw - margins.left() - margins.right()
+        avail_h = vh - margins.top() - margins.bottom()
+        if avail_w <= CARD_W or avail_h <= CARD_H:
+            return CARD_W, CARD_H, PLOT_W, PLOT_H
+
+        # Cap the zoom so one or two ROIs grow to a comfortable size, not the whole
+        # screen; keep the base card's aspect ratio while scaling.
+        MAX_SCALE = 2.2
+        aspect = CARD_H / CARD_W
+        best_w = float(CARD_W)
+        best_area = 0.0
+        for ncols in range(1, n + 1):
+            nrows = math.ceil(n / ncols)
+            cw = (avail_w - spacing * (ncols - 1)) / ncols
+            ch = cw * aspect
+            if nrows * ch + spacing * (nrows - 1) > avail_h:
+                continue  # this column count overflows the viewport vertically
+            cw = min(cw, CARD_W * MAX_SCALE)
+            if cw < CARD_W:
+                continue  # never shrink below the base size
+            area = cw * (cw * aspect)
+            if area > best_area:
+                best_area = area
+                best_w = cw
+
+        scale = best_w / CARD_W
+        return (int(best_w), int(best_w * aspect),
+                int(PLOT_W * scale), int(PLOT_H * scale))
+
+    def _populate_cards(self):
+        """(Re)build the card grid from the cached traces at a size chosen for the
+        current ROI count and viewport, so a few ROIs render large and centered."""
+        if not getattr(self, '_trace_data_list', None):
+            return
+        self._clear_cards()
+        meta = self._render_meta
+        frame_start = meta['frame_start']
+        frame_end = meta['frame_end']
+        ymin = meta['ymin']
+        ymax = meta['ymax']
+        ylabel = meta['ylabel']
+        stim_frames = meta['stim_frames']
+        dpr = self.devicePixelRatioF()
+
+        card_w, card_h, plot_w, plot_h = self._compute_card_dims(
+            len(self._trace_data_list))
+        self._card_dims = (card_w, card_h)
+
+        self._show_grid()
+        for trace_data in self._trace_data_list:
             roi_data = trace_data['roi_data']
             roi_idx = trace_data['roi_idx']
             trace = trace_data['trace']
-            
-            row = plot_idx // num_cols
-            col = plot_idx % num_cols
-            
-            # Create plot widget for this ROI
-            plot_widget = self._create_roi_plot_from_trace(
-                roi_data, roi_idx, trace, frame_start, frame_end, ymin, ymax
+            roi_name = roi_data.get('name', f'ROI {roi_idx + 1}')
+
+            pixmap = render_trace_pixmap(
+                trace, width_px=plot_w, height_px=plot_h, device_pixel_ratio=dpr,
+                frame_start=frame_start, frame_end=frame_end,
+                ymin=ymin, ymax=ymax, stim_frames=stim_frames, ylabel=ylabel,
             )
-            self.grid_layout.addWidget(plot_widget, row, col)
-            self.plot_widgets.append(plot_widget)
-        
-        # Add stretch to empty cells if last row is not full
-        last_row_cols = num_rois % num_cols
-        if last_row_cols > 0:
-            last_row = num_rois // num_cols
-            for col in range(last_row_cols, num_cols):
-                spacer = QWidget()
-                spacer.setStyleSheet("QWidget { background-color: white; }")
-                self.grid_layout.addWidget(spacer, last_row, col)
-    
-    def _create_roi_plot_from_trace(self, roi_data, roi_idx, trace, frame_start, frame_end, ymin, ymax):
-        """Create a single matplotlib plot for an ROI trace (from pre-computed trace)."""
-        # Create a container widget
-        container = QWidget()
-        container.setStyleSheet("QWidget { background-color: white; border: none; }")
-        layout = QVBoxLayout()
-        layout.setContentsMargins(2, 2, 2, 2)
-        
-        # Create matplotlib figure with white background - smaller for fitting on screen
-        fig = Figure(figsize=(3, 2), dpi=80, facecolor='white')
-        canvas = FigureCanvas(fig)
-        canvas.setStyleSheet("background-color: white;")
-        ax = fig.add_subplot(111, facecolor='white')
-        
-        # ROI name will be added as title in matplotlib
-        roi_name = roi_data.get('name', f'ROI {roi_idx + 1}')
-        
-        if trace is not None and len(trace) > 0:
-            # Apply frame range
-            if frame_end is None or frame_end > len(trace):
-                frame_end = len(trace)
-            
-            frame_start = max(0, frame_start)
-            frame_end = max(frame_start + 1, min(frame_end, len(trace)))
-            
-            x_values = np.arange(frame_start, frame_end)
-            y_values = trace[frame_start:frame_end]
-            
-            # Plot the trace with transparency like in notebook
-            ax.plot(x_values, y_values, linewidth=1.2, color='#2E86AB', alpha=0.8)
-            
-            # Add stimulation line if enabled
-            if self.show_stim_checkbox.isChecked():
-                # Get stimulation timeframes from metadata
-                stim_frames = self._get_stimulation_frames()
-                if stim_frames:
-                    # Draw a dashed line for each stimulation frame within the current view range
-                    for stim_frame in stim_frames:
-                        if frame_start <= stim_frame < frame_end:
-                            ax.axvline(x=stim_frame, color='red', linestyle='--', alpha=0.7, linewidth=1.5)
-            
-            # Determine ylabel based on formula
-            formula_idx = self.formula_dropdown.currentIndex()
-            if formula_idx in [0, 1]:
-                ylabel = 'ΔF/F₀'
-            elif formula_idx == 2:
-                ylabel = 'Green (a.u.)'
-            elif formula_idx == 3:
-                ylabel = 'Red (a.u.)'
-            else:
-                ylabel = 'Signal'
-            
-            # Add ROI name as title (smaller font)
-            ax.set_title(roi_name, fontsize=7, fontweight='bold', color='#333', pad=3)
-            
-            # Set labels with smaller fonts for compact display
-            ax.set_xlabel('Frame', fontsize=6, color='#333')
-            ax.set_ylabel(ylabel, fontsize=6, color='#333')
-            ax.tick_params(labelsize=5, colors='#333')
-            
-            # Set y-limits if specified
-            if ymin is not None and ymax is not None and ymax > ymin:
-                ax.set_ylim(ymin, ymax)
-            
-            # No background grid
-            ax.grid(False)
-            
-            # Show only left (y-axis) and bottom (x-axis) spines
-            ax.spines['left'].set_visible(True)
-            ax.spines['left'].set_color('#333')
-            ax.spines['left'].set_linewidth(0.8)
-            ax.spines['bottom'].set_visible(True)
-            ax.spines['bottom'].set_color('#333')
-            ax.spines['bottom'].set_linewidth(0.8)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-        else:
-            ax.text(0.5, 0.5, 'No data', 
-                   ha='center', va='center', 
-                   transform=ax.transAxes,
-                   fontsize=8, color='#999')
-            ax.set_title(roi_name, fontsize=7, fontweight='bold', color='#333', pad=3)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            # Show only left and bottom spines
-            ax.spines['left'].set_visible(True)
-            ax.spines['left'].set_color('#333')
-            ax.spines['left'].set_linewidth(0.8)
-            ax.spines['bottom'].set_visible(True)
-            ax.spines['bottom'].set_color('#333')
-            ax.spines['bottom'].set_linewidth(0.8)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-        
-        fig.tight_layout(pad=0.3)
-        layout.addWidget(canvas)
-        
-        container.setLayout(layout)
-        # Set even smaller sizes to prevent window expansion
-        container.setMinimumSize(150, 120)
-        container.setMaximumSize(350, 250)
-        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        
-        return container
-    
-    def _get_stimulation_frames(self):
-        """Get stimulation frame indices from experiment metadata."""
-        try:
-            # Get metadata from the main window
-            exp_data = getattr(self.window, '_exp_data', None)
-            
-            if exp_data is None:
-                return []
-            
-            # Handle different metadata formats
-            stim_frames = []
-            
-            # Check if it's a dict-like object
-            if isinstance(exp_data, dict):
-                stim_frames = exp_data.get('stimulation_timeframes', [])
-            # Check if it has the attribute directly (pickle format)
-            elif hasattr(exp_data, 'stimulation_timeframes'):
-                stim_frames = getattr(exp_data, 'stimulation_timeframes', [])
-            # Try accessing as dict keys (some formats store as dict-like)
-            else:
-                try:
-                    stim_frames = exp_data['stimulation_timeframes']
-                except (KeyError, TypeError):
-                    pass
-            
-            # Ensure we have a valid list
-            if stim_frames and len(stim_frames) > 0:
-                print(f"DEBUG: Found {len(stim_frames)} stimulation frames: {stim_frames}")
-                return stim_frames
-            else:
-                print(f"DEBUG: No stimulation frames found in metadata")
-                return []
-                
-        except Exception as e:
-            print(f"DEBUG: Error getting stimulation frames: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        return []
-    
+            card = _TraceCard(roi_name, pixmap, card_w=card_w, card_h=card_h)
+            # Bind current values for the detail view via default args.
+            card.clicked.connect(
+                lambda _=False, rn=roi_name, tr=trace, fs=frame_start, fe=frame_end,
+                yn=ymin, yx=ymax, sf=stim_frames, yl=ylabel:
+                self._open_detail(rn, tr, fs, fe, yn, yx, sf, yl))
+            self.flow_layout.addWidget(card)
+            self.cards.append(card)
+
+        self.count_label.setText(f"{len(self._trace_data_list)} ROIs")
+
+    def _open_detail(self, roi_name, trace, frame_start, frame_end, ymin, ymax,
+                     stim_frames, ylabel):
+        dialog = _TraceDetailDialog(
+            roi_name, trace, frame_start=frame_start, frame_end=frame_end,
+            ymin=ymin, ymax=ymax, stim_frames=stim_frames, ylabel=ylabel,
+            parent=self)
+        dialog.show()
+
+    # --------------------------------------------------------------- events
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Re-zoom a small ROI set to the new viewport. Only re-render when the
+        # chosen card size actually changes — for large (base-size, scrolling)
+        # sets the size is unchanged, so this is a no-op and we avoid thrashing.
+        if not self._trace_data_list:
+            return
+        new_dims = self._compute_card_dims(len(self._trace_data_list))[:2]
+        if new_dims != self._card_dims:
+            self._populate_cards()
+
     def showEvent(self, event):
-        """Called when the tab is shown - refresh plots and update frame range."""
         super().showEvent(event)
-        
-        # Update frame range based on current data (without triggering refresh)
         current_tif = getattr(self.window, '_current_tif', None)
         if current_tif is not None:
             nframes = current_tif.shape[0] if current_tif.ndim == 3 else 1
             self._updating = True
             self.frame_end_edit.setMaximum(nframes)
             self.frame_start_edit.setMaximum(nframes - 1)
-            # Only update the value if it's at the default or exceeds the actual frame count
             if self.frame_end_edit.value() >= 999999 or self.frame_end_edit.value() > nframes:
                 self.frame_end_edit.setValue(nframes)
             self._updating = False
-        
-        # Only refresh if we don't have plots yet or ROIs changed
-        if not self.plot_widgets or len(self.plot_widgets) == 0:
+
+        # Tags may have changed in First Level while this tab was hidden; rebuild
+        # the dropdown and re-render if its structure changed (or nothing is shown).
+        tag_filter_changed = self._rebuild_tag_filter()
+        if tag_filter_changed or not self.cards:
             self.refresh_plots()

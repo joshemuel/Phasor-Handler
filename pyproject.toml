@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "phasor-handler"
-version = "3.1.4"
+version = "3.5.0"
 authors = [{ name = "Josia Shemuel", email = "joshemuel@users.noreply.github.com" }]
 description = "A PyQt6 GUI toolbox for processing two-photon phasor imaging data"
 readme = "README.md"
@@ -61,6 +61,7 @@ packages = [
   "phasor_handler.widgets",
   "phasor_handler.widgets.analysis",
   "phasor_handler.widgets.analysis.components",
+  "phasor_handler.widgets.common",
   "phasor_handler.widgets.conversion",
   "phasor_handler.widgets.registration",
   "phasor_handler.widgets.secondlevel",
@@ -69,10 +70,13 @@ packages = [
   "phasor_handler.scripts",
   "phasor_handler.tools",
   "phasor_handler.themes",
+  "phasor_handler.theme",
 ]
 
 [tool.setuptools.package-data]
 phasor_handler = [
   "img/*.ico",
   "img/icons/*.svg",
+  "theme/fonts/*.ttf",
+  "theme/fonts/*.txt",
 ]

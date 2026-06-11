@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QLocale
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from phasor_handler.tools.lazy_stack import LazyFrameStack, to_stack3d
+from phasor_handler.theme import tokens
+from phasor_handler.theme.mpl import style_axes
 
 
 class TraceplotWidget(QWidget):
@@ -36,71 +38,64 @@ class TraceplotWidget(QWidget):
         self._init_ui()
         
     def _init_ui(self):
-        """Initialize the UI components for trace plotting."""
-        # Main layout
+        """Initialize the UI components for trace plotting.
+
+        Controls live in a compact vertical column down the left-bottom side of
+        the panel, with the canvas taking the rest of the width to the right.
+        The column is kept narrow (horizontally apt) so it never crowds the plot.
+        """
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Left side: Controls
-        controls_layout = QVBoxLayout()
-        
-        # Y limits inputs
-        ylim_layout = QVBoxLayout()
-        ylim_layout.setSpacing(2)
-        ylim_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(8)
 
-        ylim_label_inner = QHBoxLayout()
-        ylim_label_inner.setContentsMargins(0, 0, 0, 0)
+        # Left side: trace controls stacked vertically, pinned to the bottom. A
+        # small bottom margin keeps the last control (Frames/Seconds toggle) off
+        # the panel's bottom edge so it isn't clipped.
+        controls_col = QVBoxLayout()
+        controls_col.setContentsMargins(0, 0, 0, 8)
+        controls_col.setSpacing(4)
+        controls_col.addStretch(1)  # push the controls down to the bottom-left
 
         ylim_label = QLabel("Y limits:")
         ylim_label.setSizePolicy(QSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
-        ylim_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         self.ylim_min_edit = QDoubleSpinBox()
-        self.ylim_min_edit.setFixedWidth(70)
-        self.ylim_min_edit.setFixedHeight(20)
+        self.ylim_min_edit.setFixedWidth(82)
+        self.ylim_min_edit.setFixedHeight(24)
         self.ylim_min_edit.setRange(-999999.99, 999999.99)
         self.ylim_min_edit.setSingleStep(0.01)
         self.ylim_min_edit.setDecimals(3)
         self.ylim_min_edit.setValue(-0.05)  # Start at a neutral value
         self.ylim_min_edit.setEnabled(False)  # Disabled until ROI is drawn
+        self.ylim_min_edit.setToolTip("Y-axis minimum")
         self.ylim_min_edit.valueChanged.connect(self._on_ylim_changed)
 
         self.ylim_max_edit = QDoubleSpinBox()
-        self.ylim_max_edit.setFixedWidth(70)
-        self.ylim_max_edit.setFixedHeight(20)
+        self.ylim_max_edit.setFixedWidth(82)
+        self.ylim_max_edit.setFixedHeight(24)
         self.ylim_max_edit.setRange(-999999.99, 999999.99)
         self.ylim_max_edit.setSingleStep(0.01)
         self.ylim_max_edit.setDecimals(3)
         self.ylim_max_edit.setValue(0.5)  # Start at a neutral value
         self.ylim_max_edit.setEnabled(False)  # Disabled until ROI is drawn
+        self.ylim_max_edit.setToolTip("Y-axis maximum")
         self.ylim_max_edit.valueChanged.connect(self._on_ylim_changed)
 
-        ylim_label_inner.addWidget(self.ylim_min_edit)
-        ylim_label_inner.addWidget(self.ylim_max_edit)
-        ylim_label_inner.addStretch()
+        # Min/max sit side by side to keep the column short.
+        ylim_row = QHBoxLayout()
+        ylim_row.setContentsMargins(0, 0, 0, 0)
+        ylim_row.setSpacing(4)
+        ylim_row.addWidget(self.ylim_min_edit)
+        ylim_row.addWidget(self.ylim_max_edit)
+        ylim_row.addStretch()
 
         self.reset_ylim_button = QPushButton("Auto")
-        self.reset_ylim_button.setFixedWidth(50)
-        self.reset_ylim_button.setFixedHeight(20)
+        self.reset_ylim_button.setFixedWidth(72)  # wider so "Auto" isn't cropped
+        self.reset_ylim_button.setFixedHeight(24)
+        self.reset_ylim_button.setToolTip("Reset y-limits to the data range")
         self.reset_ylim_button.clicked.connect(self._reset_ylim)
 
-        ylim_layout.addWidget(ylim_label)
-        ylim_layout.addLayout(ylim_label_inner)
-        ylim_layout.addSpacing(4)
-        ylim_layout.addWidget(self.reset_ylim_button)
-        controls_layout.addLayout(ylim_layout)
-
-        # Add spacing between sections
-        controls_layout.addSpacing(10)
-
-        # Baseline seconds spinbox
-        baseline_layout = QVBoxLayout()
-        baseline_layout.setSpacing(0)  # Small spacing between label and spinbox
-        baseline_layout.setContentsMargins(0, 0, 0, 0)
-        baseline_label = QLabel("Baseline (s):")
-        baseline_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
-        baseline_layout.addWidget(baseline_label)
+        baseline_label = QLabel("Baseline:")
         self.base_spinbox = QDoubleSpinBox()
         c_locale = QLocale(QLocale.Language.C)
         c_locale.setNumberOptions(QLocale.NumberOption.RejectGroupSeparator)
@@ -110,68 +105,85 @@ class TraceplotWidget(QWidget):
         self.base_spinbox.setSingleStep(0.5)
         self.base_spinbox.setDecimals(1)
         self.base_spinbox.setSuffix(" s")
-        self.base_spinbox.setFixedWidth(80)
-        self.base_spinbox.setFixedHeight(25)
+        self.base_spinbox.setFixedWidth(86)
+        self.base_spinbox.setFixedHeight(24)
+        self.base_spinbox.setToolTip("Baseline window used for Fo (seconds)")
         self.base_spinbox.valueChanged.connect(self._update_trace_from_roi)
-        baseline_layout.addWidget(self.base_spinbox)
-        controls_layout.addLayout(baseline_layout)
 
-        # Add spacing between sections
-        controls_layout.addSpacing(10)
-
-        # Formula dropdown
         self.formula_dropdown = QComboBox()
-        self.formula_dropdown.setFixedWidth(100)
-        self.formula_dropdown.setStyleSheet("QComboBox { font-size: 8pt; }")
+        self.formula_dropdown.setFixedWidth(140)
+        self.formula_dropdown.setFixedHeight(24)
         self.formula_dropdown.addItem("Fg - Fog / Fr")
         self.formula_dropdown.addItem("Fg - Fog / Fog")
         self.formula_dropdown.addItem("Fg only")
         self.formula_dropdown.addItem("Fr only")
-        self.formula_dropdown.setContentsMargins(0, 0, 0, 0)
         self.formula_dropdown.currentIndexChanged.connect(self._update_trace_from_roi)
-        controls_layout.addWidget(self.formula_dropdown)
 
-        controls_layout.addSpacing(15)
-
-        # Time display toggle button
         self.time_display_button = QPushButton("Seconds")
-        self.time_display_button.setFixedWidth(100)
-        self.time_display_button.setFixedHeight(20)
+        self.time_display_button.setFixedWidth(84)
+        self.time_display_button.setFixedHeight(24)
         self.time_display_button.setCheckable(True)
         self.time_display_button.setChecked(True)  # Default to seconds
-        self.time_display_button.setStyleSheet("QPushButton { font-size: 8pt; }")
         self.time_display_button.setToolTip("Toggle between frame numbers and time in seconds")
         self.time_display_button.clicked.connect(self._toggle_time_display)
-        controls_layout.addWidget(self.time_display_button)
-        
-        main_layout.addLayout(controls_layout, 0) 
 
-        # Right side: Figure and canvas
+        controls_col.addWidget(ylim_label)
+        controls_col.addLayout(ylim_row)
+        controls_col.addWidget(self.reset_ylim_button)
+        controls_col.addSpacing(8)
+        controls_col.addWidget(baseline_label)
+        controls_col.addWidget(self.base_spinbox)
+        controls_col.addSpacing(8)
+        controls_col.addWidget(self.formula_dropdown)
+        controls_col.addSpacing(8)
+        controls_col.addWidget(self.time_display_button)
+
+        main_layout.addLayout(controls_col, 0)
+
+        # Right side: figure and canvas (takes the remaining width)
         self.trace_fig, self.trace_ax = plt.subplots(figsize=(12, 6), dpi=100)
         self.trace_ax.set_xticks([])
         self.trace_ax.set_yticks([])
         self.trace_ax.set_xlabel("")
         self.trace_ax.set_ylabel("")
-        for spine in self.trace_ax.spines.values():
-            spine.set_visible(True)
         self.trace_fig.patch.set_alpha(0.0)
-        self.trace_ax.set_facecolor('none')
         self.trace_canvas = FigureCanvas(self.trace_fig)
-        self.trace_canvas.setStyleSheet("background:transparent; border: 1px solid #888;")
+        self.trace_canvas.setStyleSheet(
+            f"background:transparent; border: 1px solid {tokens.HAIRLINE};")
         self.trace_canvas.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.trace_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.trace_ax.xaxis.label.set_color('white')
-        self.trace_ax.yaxis.label.set_color('white')
-        self.trace_ax.tick_params(axis='x', colors='white')
-        self.trace_ax.tick_params(axis='y', colors='white')
-        for spine in self.trace_ax.spines.values():
-            spine.set_color('white')
+        self.trace_canvas.setMinimumHeight(110)
+        # Transparent so the themed pane shows through; spines/ticks via shared helper.
+        style_axes(self.trace_ax, variant="trace", transparent=True)
+        self.trace_ax.xaxis.label.set_color(tokens.MUTED)
+        self.trace_ax.yaxis.label.set_color(tokens.MUTED)
         self.trace_fig.tight_layout()
         
         main_layout.addWidget(self.trace_canvas, 1)  # Give stretch factor of 1 to make it expand
 
         self.setLayout(main_layout)
         
+    def restyle_theme(self):
+        """Re-apply theme colors to the trace figure after a palette switch.
+
+        The figure patch is transparent so its background follows the themed pane
+        automatically; this refreshes the spine/label colors, the canvas border,
+        and recolors any currently-plotted trace line, then redraws.
+        """
+        try:
+            self.trace_canvas.setStyleSheet(
+                f"background:transparent; border: 1px solid {tokens.HAIRLINE};")
+            style_axes(self.trace_ax, variant="trace", transparent=True)
+            self.trace_ax.xaxis.label.set_color(tokens.MUTED)
+            self.trace_ax.yaxis.label.set_color(tokens.MUTED)
+            for line in self.trace_ax.get_lines():
+                # Recolor the trace line (accent) but leave stim markers (dashed) alone.
+                if line.get_linestyle() in ("-", "solid"):
+                    line.set_color(tokens.ACCENT)
+            self.trace_canvas.draw_idle()
+        except Exception as exc:  # noqa: BLE001
+            print(f"DEBUG: trace plot restyle_theme failed: {exc}")
+
     def set_main_window(self, main_window):
         """Set reference to the main window for accessing data."""
         self.main_window = main_window
@@ -410,13 +422,13 @@ class TraceplotWidget(QWidget):
 
         # Plot metric with appropriate x-axis
         if x_values is not None:
-            self.trace_ax.plot(x_values, metric, label="(F green - Fo green)/F red", color='white')
+            self.trace_ax.plot(x_values, metric, label="(F green - Fo green)/F red", color=tokens.ACCENT)
         else:
-            self.trace_ax.plot(metric, label="(F green - Fo green)/F red", color='white')
-        
-        self.trace_ax.set_xlabel(x_label, color='white', labelpad=2)
+            self.trace_ax.plot(metric, label="(F green - Fo green)/F red", color=tokens.ACCENT)
+
+        self.trace_ax.set_xlabel(x_label, color=tokens.MUTED, labelpad=2)
         self.trace_ax.tick_params(axis='x', pad=1, labelsize=9)
-        self._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=20, linewidth=2)
+        self._frame_vline = self.trace_ax.axvline(current_x_pos, color=tokens.WARN, linestyle='-', zorder=20, linewidth=2)
         
         # Store frame vline reference on main window for compatibility
         if self.main_window:
@@ -442,11 +454,11 @@ class TraceplotWidget(QWidget):
                     stim_frame = int(stim)
                     if stim_frame < len(resolved):
                         stim_x_pos = resolved[stim_frame]
-                        self.trace_ax.axvline(stim_x_pos, color='red', linestyle='--', zorder=15, linewidth=2)
+                        self.trace_ax.axvline(stim_x_pos, color=tokens.DANGER, linestyle='--', zorder=15, linewidth=2)
             else:
                 for stim in stims:
                     stim_frame = int(stim)
-                    self.trace_ax.axvline(stim_frame, color='red', linestyle='--', zorder=15, linewidth=2)
+                    self.trace_ax.axvline(stim_frame, color=tokens.DANGER, linestyle='--', zorder=15, linewidth=2)
         except Exception as e:
             # keep plotting even if stim drawing fails
             print(f"DEBUG: Error adding stimulation vlines: {e}")
@@ -501,6 +513,9 @@ class TraceplotWidget(QWidget):
             print(f"DEBUG: Error setting y-limits: {e}")
             pass
 
+        # Re-apply themed spines/ticks (cla() above resets them).
+        style_axes(self.trace_ax, variant="trace", transparent=True)
+        self.trace_ax.yaxis.label.set_color(tokens.MUTED)
         self.trace_fig.tight_layout()
         self.trace_canvas.draw_idle()
 
@@ -636,7 +651,7 @@ class TraceplotWidget(QWidget):
 
         # Ensure we have a persistent vline and move it (create if missing)
         if not hasattr(self, '_frame_vline') or self._frame_vline is None:
-            self._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=10, linewidth=2)
+            self._frame_vline = self.trace_ax.axvline(current_x_pos, color=tokens.WARN, linestyle='-', zorder=10, linewidth=2)
             if self.main_window:
                 self.main_window._frame_vline = self._frame_vline
         else:
@@ -644,7 +659,7 @@ class TraceplotWidget(QWidget):
                 self._frame_vline.set_xdata([current_x_pos, current_x_pos])
             except Exception:
                 # recreate fallback
-                self._frame_vline = self.trace_ax.axvline(current_x_pos, color='yellow', linestyle='-', zorder=10, linewidth=2)
+                self._frame_vline = self.trace_ax.axvline(current_x_pos, color=tokens.WARN, linestyle='-', zorder=10, linewidth=2)
                 if self.main_window:
                     self.main_window._frame_vline = self._frame_vline
 
@@ -856,15 +871,9 @@ class TraceplotWidget(QWidget):
             self.trace_ax.set_yticks([])
             self.trace_ax.set_xlabel("")
             self.trace_ax.set_ylabel("")
-            for spine in self.trace_ax.spines.values():
-                spine.set_visible(True)
-            self.trace_ax.set_facecolor('none')
-            self.trace_ax.xaxis.label.set_color('white')
-            self.trace_ax.yaxis.label.set_color('white')
-            self.trace_ax.tick_params(axis='x', colors='white')
-            self.trace_ax.tick_params(axis='y', colors='white')
-            for spine in self.trace_ax.spines.values():
-                spine.set_color('white')
+            style_axes(self.trace_ax, variant="trace", transparent=True)
+            self.trace_ax.xaxis.label.set_color(tokens.MUTED)
+            self.trace_ax.yaxis.label.set_color(tokens.MUTED)
         
         # Disable and reset y-limit spinboxes when trace is cleared
         if hasattr(self, 'ylim_min_edit'):
